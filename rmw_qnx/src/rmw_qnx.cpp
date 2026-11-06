@@ -35,6 +35,8 @@
 
 #include "cdr.hpp"
 #include "names.hpp"
+#include "qos.hpp"
+#include "rmw/time.h"
 #include "rcutils/strdup.h"
 #include "rmw/allocators.h"
 #include "rmw/dynamic_message_type_support.h"
@@ -338,6 +340,36 @@ const its::ServiceMembers *service_members(const rosidl_service_type_support_t *
 rmw_ret_t unsupported(const char *what) {
   RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("rmw_qnx: %s is not supported yet", what);
   return RMW_RET_UNSUPPORTED;
+}
+
+rmw_qnx::core::Qos to_core(const rmw_qos_profile_t &q) {
+  using namespace rmw_qnx::core;  // NOLINT
+  Qos c;
+  switch (q.reliability) {
+    case RMW_QOS_POLICY_RELIABILITY_RELIABLE: c.reliability = Reliability::kReliable; break;
+    case RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT: c.reliability = Reliability::kBestEffort; break;
+    case RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT: c.reliability = Reliability::kSystemDefault; break;
+    default: c.reliability = Reliability::kUnknown; break;
+  }
+  switch (q.durability) {
+    case RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL: c.durability = Durability::kTransientLocal; break;
+    case RMW_QOS_POLICY_DURABILITY_VOLATILE: c.durability = Durability::kVolatile; break;
+    case RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT: c.durability = Durability::kSystemDefault; break;
+    default: c.durability = Durability::kUnknown; break;
+  }
+  switch (q.liveliness) {
+    case RMW_QOS_POLICY_LIVELINESS_AUTOMATIC: c.liveliness = Liveliness::kAutomatic; break;
+    case RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC: c.liveliness = Liveliness::kManualByTopic; break;
+    case RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT: c.liveliness = Liveliness::kSystemDefault; break;
+    default: c.liveliness = Liveliness::kUnknown; break;
+  }
+  auto ns = [](rmw_time_t t) -> uint64_t {
+    if (rmw_time_equal(t, RMW_DURATION_INFINITE) || (t.sec == 0 && t.nsec == 0)) return 0;
+    return static_cast<uint64_t>(rmw_time_total_nsec(t));
+  };
+  c.deadline_ns = ns(q.deadline);
+  c.lease_ns = ns(q.liveliness_lease_duration);
+  return c;
 }
 
 }  // namespace
@@ -973,18 +1005,11 @@ rmw_ret_t rmw_qos_profile_check_compatible(const rmw_qos_profile_t pub, const rm
                                            rmw_qos_compatibility_type_t *compat, char *reason, size_t reason_size) {
   RMW_CHECK_ARGUMENT_FOR_NULL(compat, RMW_RET_INVALID_ARGUMENT);
   if (!reason && reason_size) return RMW_RET_INVALID_ARGUMENT;
-  *compat = RMW_QOS_COMPATIBILITY_OK;
-  const char *why = "";
-  if (pub.reliability == RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT &&
-      sub.reliability == RMW_QOS_POLICY_RELIABILITY_RELIABLE) {
-    *compat = RMW_QOS_COMPATIBILITY_ERROR;
-    why = "best effort publisher and reliable subscription;";
-  } else if (pub.durability == RMW_QOS_POLICY_DURABILITY_VOLATILE &&
-             sub.durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL) {
-    *compat = RMW_QOS_COMPATIBILITY_ERROR;
-    why = "volatile publisher and transient local subscription;";
-  }
-  if (reason_size) std::snprintf(reason, reason_size, "%s", why);
+  const rmw_qnx::core::CompatResult r = rmw_qnx::core::check_compatible(to_core(pub), to_core(sub));
+  *compat = r.level == rmw_qnx::core::Compat::kOk        ? RMW_QOS_COMPATIBILITY_OK
+            : r.level == rmw_qnx::core::Compat::kWarning ? RMW_QOS_COMPATIBILITY_WARNING
+                                                         : RMW_QOS_COMPATIBILITY_ERROR;
+  if (reason_size) std::snprintf(reason, reason_size, "%s", r.reason.c_str());
   return RMW_RET_OK;
 }
 
