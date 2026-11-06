@@ -39,6 +39,6 @@ colcon build --merge-install --parallel-workers 2 \
     -DCMAKE_TOOLCHAIN_FILE="$ROS/platform/qnx.nto.toolchain.cmake" \
     -DCMAKE_MODULE_PATH="$ROS/modules" \
     -DBUILD_TESTING:BOOL=OFF -DQNX_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DTHIRDPARTY=FORCE \
-    --no-warn-unused-cli -DCPU=x86_64 -DSECURITY=OFF
+    --no-warn-unused-cli -DCPU=x86_64 -DSECURITY=ON
 df -h /mnt/c | tail -1
 du -sh "$WORK/ros2-build" "$WORK/ros2-install"
