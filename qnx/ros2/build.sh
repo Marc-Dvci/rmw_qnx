@@ -23,6 +23,8 @@ fi
 for p in rosidl_python rclpy ros2cli launch launch_ros rosbag2 rviz ros2cli_common_extensions sros2 system_tests; do
     [ -d "src/ros2/$p" ] && touch "src/ros2/$p/COLCON_IGNORE"
 done
+# numpy_vendor is listed by QNX's patches in some interface packages, for their Python bindings only.
+touch modules/numpy_vendor/COLCON_IGNORE
 export CPU=x86_64 CPUVARDIR=x86_64 CPUVAR=x86_64 ARCH=x86_64
 export WORKSPACE="$ROS" PROJECT_ROOT="$ROS" INSTALL_BASE="$WORK/ros2-install/x86_64"
 export LC_NUMERIC="en_US.UTF-8" PYTHONPYCACHEPREFIX=/tmp
