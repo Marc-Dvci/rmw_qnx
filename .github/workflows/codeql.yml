@@ -1,5 +1,5 @@
-# Static analysis of the Python, the web code and these workflows. Its runs and badge are public; its alerts are
-# visible only to people with write access.
+# Static analysis of the C and C++ code and these workflows. Its runs and badge are public; its alerts are visible
+# only to people with write access.
 name: codeql
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [python, javascript-typescript, actions]
+        language: [c-cpp, actions, python]
     steps:
       - uses: actions/checkout@v4
       - uses: github/codeql-action/init@v4
