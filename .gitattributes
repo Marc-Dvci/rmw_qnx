@@ -1,3 +1,4 @@
+* text=auto eol=lf
 # Shell scripts run on Linux too, whatever machine they were last saved on.
 *.sh text eol=lf
 

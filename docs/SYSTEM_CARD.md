@@ -1,4 +1,4 @@
-# {{NAME}}: system card
+# rmw_qnx: system card
 
 <!-- TEMPLATE: keep this file when a model's output informs a decision about people, money or compliance; delete it
 otherwise. State only what was done, with figures. -->

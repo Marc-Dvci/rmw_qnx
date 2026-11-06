@@ -8,7 +8,7 @@ services:
     build:
       context: .
       target: demo
-    image: "{{REPO}}:demo"
+    image: "rmw_qnx:demo"
     ports:
       - "127.0.0.1:8080:8787"
 
@@ -16,7 +16,7 @@ services:
     build:
       context: .
       target: app
-    image: "{{REPO}}:app"
+    image: "rmw_qnx:app"
     env_file:
       - path: .env
         required: false

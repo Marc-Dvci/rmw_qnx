@@ -1,14 +1,14 @@
-# {{NAME}}
+# rmw_qnx
 
-**{{TAGLINE}}**
+**ROS 2 over QNX message passing, so a node's priority travels with its messages**
 
-[![Tests](https://github.com/{{OWNER}}/{{REPO}}/actions/workflows/tests.yml/badge.svg)](https://github.com/{{OWNER}}/{{REPO}}/actions/workflows/tests.yml)
+[![Tests](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/tests.yml/badge.svg)](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/tests.yml)
 [![Decision core coverage](https://img.shields.io/badge/decision%20core%20coverage-{{COVERAGE}}%25-brightgreen)](tests/)
-[![CodeQL](https://github.com/{{OWNER}}/{{REPO}}/actions/workflows/codeql.yml/badge.svg)](https://github.com/{{OWNER}}/{{REPO}}/actions/workflows/codeql.yml)
+[![CodeQL](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/codeql.yml/badge.svg)](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Live demo](https://img.shields.io/badge/live-demo-0a7d6e)]({{LIVE_URL}})
 
-[![Watch the film: {{NAME}}](docs/film_thumbnail.jpg)](https://www.youtube.com/watch?v={{VIDEO_ID}})
+[![Watch the film: rmw_qnx](docs/film_thumbnail.jpg)](https://www.youtube.com/watch?v={{VIDEO_ID}})
 
 **[Watch the film](https://www.youtube.com/watch?v={{VIDEO_ID}})**
 
@@ -40,7 +40,7 @@
 
 ## How it works
 
-![{{NAME}}, step by step: the input, the model step that reads it, the decision by fixed rules, and the output with
+![rmw_qnx, step by step: the input, the model step that reads it, the decision by fixed rules, and the output with
 its evidence](docs/architecture.png)
 
 Models read and phrase; plain code decides ([`app/core.py`](app/core.py)). The diagram's source is
@@ -64,7 +64,7 @@ what is synthetic. -->
 
 > [!TIP]
 > Nothing to install: the [live demo]({{LIVE_URL}}), or a ready environment in your browser:
-> [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/{{OWNER}}/{{REPO}}?quickstart=1)
+> [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Marc-Dvci/rmw_qnx?quickstart=1)
 
 ### With Docker
 
