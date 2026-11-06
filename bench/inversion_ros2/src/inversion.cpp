@@ -122,12 +122,19 @@ void work() {
 
 using AddTwoInts = example_interfaces::srv::AddTwoInts;
 
+// The same options on every RMW: only the service under test, without the rosout and parameter topics a node
+// creates by default (rmw_qnx has no topics yet).
+rclcpp::NodeOptions node_options() {
+  return rclcpp::NodeOptions().enable_rosout(false).start_parameter_services(false).start_parameter_event_publisher(
+      false);
+}
+
 int run_server(int argc, char **argv) {
   become(kPrioServer);
   calibrate();
   g_log = map_log(false);
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<rclcpp::Node>("inversion_server");
+  auto node = std::make_shared<rclcpp::Node>("inversion_server", node_options());
   auto srv = node->create_service<AddTwoInts>(
       "inversion", [](const std::shared_ptr<AddTwoInts::Request> req, std::shared_ptr<AddTwoInts::Response> res) {
         const int seq = static_cast<int>(req->a);
@@ -181,18 +188,20 @@ bool in_burst(const std::vector<Event> &ev, uint64_t t, uint64_t *burst_end) {
 int run_client(int argc, char **argv, int nreq, bool verbose) {
   become(kPrioClient);
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<rclcpp::Node>("inversion_client");
+  auto node = std::make_shared<rclcpp::Node>("inversion_client", node_options());
   auto cli = node->create_client<AddTwoInts>("inversion");
   if (!cli->wait_for_service(std::chrono::seconds(20))) {
     std::fprintf(stderr, "inversion: service not available\n");
     return 1;
   }
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node);
   // Warm up: the first calls pay for discovery and allocation.
   for (int i = 0; i < 5; i++) {
     auto req = std::make_shared<AddTwoInts::Request>();
     req->a = -1;
     auto f = cli->async_send_request(req);
-    rclcpp::spin_until_future_complete(node, f, std::chrono::seconds(5));
+    exec.spin_until_future_complete(f, std::chrono::seconds(5));
   }
   std::vector<int> prio(nreq, -1);
   std::vector<uint64_t> send(nreq), reply(nreq);
@@ -204,7 +213,7 @@ int run_client(int argc, char **argv, int nreq, bool verbose) {
     log_ev(kSend, seq);
     send[seq] = ClockCycles();
     auto f = cli->async_send_request(req);
-    if (rclcpp::spin_until_future_complete(node, f, std::chrono::seconds(2)) == rclcpp::FutureReturnCode::SUCCESS) {
+    if (exec.spin_until_future_complete(f, std::chrono::seconds(2)) == rclcpp::FutureReturnCode::SUCCESS) {
       prio[seq] = static_cast<int>(f.get()->sum);
     } else {
       lost++;
