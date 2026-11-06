@@ -21,3 +21,6 @@ web/dist*/
 data/cache/
 data/runs/
 *.log
+
+# Decoded traces are regenerated from the .kev files by scripts/trace_decode.sh
+results/**/*.trace

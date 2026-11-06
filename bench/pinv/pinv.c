@@ -331,6 +331,8 @@ int main(int argc, char **argv) {
     }
 
     int mfd = marker ? open(marker, O_WRONLY) : -1;
+    printf("PIDS client=%d server=%d load=%d\n", getpid(), srv, ld);
+    fflush(stdout);
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     for (int32_t seq = 0; seq < nreq; seq++) {
