@@ -378,7 +378,8 @@ rmw_ret_t rmw_init_options_copy(const rmw_init_options_t *src, rmw_init_options_
     RMW_SET_ERROR_MSG("expected zero-initialized dst");
     return RMW_RET_INVALID_ARGUMENT;
   }
-  const rcutils_allocator_t *a = &src->allocator;
+  rcutils_allocator_t alloc = src->allocator;
+  const rcutils_allocator_t *a = &alloc;
   rmw_init_options_t tmp = *src;
   tmp.enclave = rcutils_strdup(src->enclave, *a);
   if (src->enclave && !tmp.enclave) return RMW_RET_BAD_ALLOC;
@@ -389,7 +390,7 @@ rmw_ret_t rmw_init_options_copy(const rmw_init_options_t *src, rmw_init_options_
     return r;
   }
   tmp.discovery_options = rmw_get_zero_initialized_discovery_options();
-  r = rmw_discovery_options_copy(&src->discovery_options, a, &tmp.discovery_options);
+  r = rmw_discovery_options_copy(&src->discovery_options, &alloc, &tmp.discovery_options);
   if (r != RMW_RET_OK) {
     rmw_security_options_fini(&tmp.security_options, a);
     a->deallocate(tmp.enclave, a->state);
