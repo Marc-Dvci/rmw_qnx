@@ -12,7 +12,7 @@ mkdir -p "$ROS/src/rmwqnx"
 ln -sfn "$REPO/rmw_qnx" "$ROS/src/rmwqnx/rmw_qnx"
 ln -sfn "$REPO/bench/inversion_ros2" "$ROS/src/rmwqnx/inversion_ros2"
 cd "$ROS"
-export CPU=x86_64 CPUVARDIR=x86_64 CPUVAR=x86_64 ARCH=x86_64
+export CPU=x86_64 CPUVARDIR=x86_64 CPUVAR=x86_64 ARCH=x86_64 QNX_SDP_VERSION=qnx800
 export WORKSPACE="$ROS" PROJECT_ROOT="$ROS" INSTALL_BASE="$WORK/ros2-install/x86_64"
 export MAKEFLAGS=-j4
 colcon build --merge-install \
