@@ -1,0 +1,4 @@
+# This OpenSSH's sshd exits at boot without sshd-auth, so it starts again once the helper is linked in.
+ln -sPf /system/bin/sshd-auth /usr/libexec/sshd-auth
+echo "---> Starting sshd with sshd-auth"
+STARTU_P(sshd_t,__SSHD_ID__) /system/bin/sshd -f /system/etc/ssh/sshd_config

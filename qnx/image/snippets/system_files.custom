@@ -1,0 +1,4 @@
+# rmw_qnx test binaries, added to the system partition (/system/bin).
+[uid=0 gid=0 perms=755] bin/pinv=__RMWQNX_BIN__/pinv
+# This OpenSSH runs a separate sshd-auth for each login; post_start.custom links it where sshd looks for it.
+[uid=0 gid=0 perms=755] bin/sshd-auth=usr/libexec/sshd-auth
