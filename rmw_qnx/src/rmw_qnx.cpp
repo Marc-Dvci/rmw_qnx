@@ -94,24 +94,31 @@ int64_t now_ns() {
   return int64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec;
 }
 
-// Something a wait set can wait for: it pulses every channel currently waiting on it.
+// Something a wait set can wait for: it pulses every channel currently waiting on it. Each pulse carries the
+// waiting thread's own assigned priority, so a wake-up never lends the waker's priority to the waiter; only a
+// service request (a message, not a pulse) carries the sender's priority.
 struct Waitable {
   std::mutex mu;
-  std::vector<int> waiters;  // connection ids to waiting channels
-  void add(int coid) {
+  std::vector<std::pair<int, int>> waiters;  // (connection id to the waiting channel, waiter's priority)
+  void add(int coid, int prio) {
     std::lock_guard<std::mutex> l(mu);
-    waiters.push_back(coid);
+    waiters.emplace_back(coid, prio);
   }
-  void remove(int coid) {
+  void remove(int coid, int prio) {
     std::lock_guard<std::mutex> l(mu);
-    auto it = std::find(waiters.begin(), waiters.end(), coid);
+    auto it = std::find(waiters.begin(), waiters.end(), std::make_pair(coid, prio));
     if (it != waiters.end()) waiters.erase(it);
   }
   void notify() {
     std::lock_guard<std::mutex> l(mu);
-    for (int coid : waiters) MsgSendPulse(coid, -1, kPulseWake, 0);
+    for (const auto &w : waiters) MsgSendPulse(w.first, w.second, kPulseWake, 0);
   }
 };
+
+int assigned_priority() {
+  sched_param p{};
+  return SchedGet(0, 0, &p) == -1 ? 10 : p.sched_priority;
+}
 
 struct GuardCondition {
   std::atomic<bool> triggered{false};
@@ -639,7 +646,8 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
       for (size_t i = 0; i < clis->client_count; i++) fn(static_cast<ClientImpl *>(clis->clients[i])->w);
   };
   // Register before checking, so a trigger between the check and the receive still wakes this wait.
-  for_each([&](Waitable &w) { w.add(coid); });
+  const int prio = assigned_priority();
+  for_each([&](Waitable &w) { w.add(coid, prio); });
 
   auto ready = [&]() {
     bool any = false;
@@ -689,7 +697,7 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
     }
     // A pulse (rcvid 0) only wakes; a timeout (ETIMEDOUT) is checked at the top.
   }
-  for_each([&](Waitable &w) { w.remove(coid); });
+  for_each([&](Waitable &w) { w.remove(coid, prio); });
 
   if (gcs)
     for (size_t i = 0; i < gcs->guard_condition_count; i++) {
