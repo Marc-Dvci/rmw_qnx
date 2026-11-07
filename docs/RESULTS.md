@@ -71,6 +71,31 @@ The traced runs' own logs agree: 20 Cyclone DDS requests where the load finished
 
 Fast DDS is not in this comparison: it is not built yet.
 
+**After topics were added to rmw_qnx**, one more rmw_qnx run (`bash scripts/inversion_ros2.sh run 200 rmw_qnx`,
+[`results/inversion-ros2-20261107-060819.txt`](../results/inversion-ros2-20261107-060819.txt)): no load, 0 misses;
+under load, 1 miss of 200, the callback at priority 20 for 200 of 200, and the load finishing first in 0 of 80
+mid-burst requests. That makes 2 misses in 800 loaded rmw_qnx calls across all recorded runs, none of them a request
+the load delayed, against 160 in 800 for Cyclone DDS (four runs of 200, all where the load finished first).
+
+## 1b. Topics through rmw_qnx
+
+**Command**: `bash scripts/inversion_ros2.sh up`, then `bash scripts/topics_check.sh 20`
+([`bench/inversion_ros2/src/chatter.cpp`](../bench/inversion_ros2/src/chatter.cpp)): a listener process and a talker
+process on `/chatter` (`example_interfaces/msg/String`), 20 messages 100 ms apart.
+
+[`results/topics-20261107-060803.txt`](../results/topics-20261107-060803.txt), rmw_qnx:
+
+```
+CHATTER published=20 subscribers_matched=0
+I heard: [hello 1]
+I heard: [hello 2]
+I heard: [hello 3]
+CHATTER received=20 last=[hello 20] publishers_matched=1
+```
+
+20 of 20 received, in order. (`subscribers_matched=0` is read after the listener had received its 20 and left.) The
+same check on Cyclone DDS in that session did not run: ssh to the guest timed out during its banner exchange.
+
 ## 2. The same property at the transport level
 
 **Command** (Git Bash on Windows, after `qnx/stage1.sh` in WSL): `bash scripts/pinv_run.sh 200`

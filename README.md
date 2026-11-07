@@ -8,14 +8,14 @@ node's priority travels with them.**
 
 | Track | Built with | Headline measurement (QEMU, WHPX) |
 |---|---|---|
-| Open-Source Contribution & Ports | QNX SDP 8.0, ROS 2 Jazzy, `MsgSend`/`MsgReply`, pulses, `tracelogger` | Through ROS 2 under a medium-priority load, a priority-20 client's service calls missed their 5 ms deadline 40 times in 200 on Cyclone DDS and once in 200 on rmw_qnx, whose server callback ran at priority 20 for all 200 ([results](docs/RESULTS.md#3-through-ros-2-the-kill-test)) |
+| Open-Source Contribution & Ports | QNX SDP 8.0, ROS 2 Jazzy, `MsgSend`/`MsgReply`, pulses, `tracelogger` | Through ROS 2 under a medium-priority load, a priority-20 client's service calls missed their 5 ms deadline 40 times in 200 on Cyclone DDS in each of three runs, and 0, 0 and 1 times on rmw_qnx, whose server callback ran at priority 20 in all 600 ([results](docs/RESULTS.md#1-the-kill-test-priority-inversion-through-ros-2)) |
 
 [How it works](#how-it-works) · [Evidence](#evidence) · [Build and run](#build-and-run) · [Status](#status)
 
 > [!IMPORTANT]
-> Status: rmw_qnx carries ROS 2 services over message passing and runs in a QNX guest; the priority-inversion
-> scenario is measured against Cyclone DDS. Topics carry no data yet, the `/dev/ros2` graph and QoS events are not
-> implemented, and no ROS 2 test suite has been run on it. [Status](#status) lists exactly what works.
+> Status: rmw_qnx carries ROS 2 services over message passing and topics over shared-memory rings, in a QNX
+> guest; the priority-inversion scenario is measured against Cyclone DDS. The `/dev/ros2` graph, graph queries and
+> QoS events are not implemented, and no ROS 2 test suite has been run on it. [Status](#status) lists exactly what works.
 
 ## For judges
 
@@ -43,7 +43,7 @@ mechanism.
 |---|---|---|
 | Service request and response | The client's call goes to a per-client sender thread by a pulse that carries the caller's priority; that thread does `MsgSend` to the server's context channel; the server thread blocked in `MsgReceive` inside `rmw_wait` takes the caller's priority, runs the callback, and `rmw_send_response` does `MsgReply` | `MsgSendPulse` with priority -1, `MsgSendv`, `MsgReceive`, `MsgReplyv`, priority inheritance on the channel |
 | Wait set | `rmw_wait` blocks in `MsgReceive` on one channel that receives requests and wake-up pulses; guard conditions pulse every channel waiting on them | `ChannelCreate`, `ConnectAttach`, `TimerTimeout` |
-| Topic (planned) | Shared-memory ring per topic, subscribers woken by pulses at their own priority | `shm_open`, `MsgSendPulse` |
+| Topic | Shared-memory ring per topic (`rmw_qnx/src/topics.hpp` over `rmw_qnx/core/ring.hpp`); the publisher pulses each subscriber's context at the priority that subscriber registered with, and the context's relay thread, now at that priority, wakes the wait set | `shm_open`, `mmap`, `MsgSendPulse`, `MsgReceivePulse` |
 | Graph (planned) | A resource manager: `ls /dev/ros2/topics`, `cat` a topic for its latest message | `resmgr_attach`, `iofunc` |
 | QoS deadline (planned) | Timer pulses to the context channel | `timer_create` with `SIGEV_PULSE` |
 
@@ -71,8 +71,13 @@ All figures are QEMU, WHPX, and each has its command in [`docs/RESULTS.md`](docs
 | Over `MsgSend`/`MsgReply` the server runs at the client's priority | 200 of 200 requests, with and without load | `bash scripts/pinv_run.sh 200` | [`results/pinv-20261107-002853.txt`](results/pinv-20261107-002853.txt) |
 | Over UDP and shared memory a medium load makes the high-priority client miss | 40 of 200 misses each; 0 over message passing | same | same |
 | The kernel ran the load before the server in no request wait over message passing, and in 21 over UDP and over shared memory | `tracelogger`, 100 requests each | `bash scripts/pinv_trace.sh` | [`results/trace-20261107-003244/`](results/trace-20261107-003244) |
+| Through ROS 2, a medium load delays a high-priority client on Cyclone DDS and not on rmw_qnx | Loaded misses: 40, 40, 40 of 200 on Cyclone DDS; 0, 0, 1 on rmw_qnx; the load finished first in 120 of 120 mid-burst Cyclone requests and 0 of 240 rmw_qnx ones | `bash scripts/killtest_all.sh` | [`results/inversion-ros2-20261107-053325.txt`](results/inversion-ros2-20261107-053325.txt) |
+| The kernel's trace shows the same through ROS 2 | The load held CPU 0 for more than 1 ms before the server's thread in 21 Cyclone DDS waits and in 0 rmw_qnx waits | same, then `scripts/trace_summary.py ... --threads` | [`results/trace-ros2-20261107-053447/`](results/trace-ros2-20261107-053447) |
+| Topics cross processes over rmw_qnx | 20 of 20 messages, in order | `bash scripts/topics_check.sh 20` | [`results/topics-20261107-060803.txt`](results/topics-20261107-060803.txt) |
 | With no load, no transport misses | 0 of 200 each | `bash scripts/pinv_run.sh 200` | [`results/pinv-20261107-002853.txt`](results/pinv-20261107-002853.txt) |
 | The core (ring, CDR reader, name encoding, graph bookkeeping, QoS rules) behaves as specified | 53 host tests, including property tests; 95.8 % of the core's lines, 70.1 % of its branches | `COVERAGE=1 scripts/host_tests.sh` | [docs/RESULTS.md](docs/RESULTS.md#4-host-tests-of-the-core) |
+
+Porting notes, with reproductions of what had to change for ROS 2 to run on QNX 8.0 x86_64: [`docs/PORTING_NOTES.md`](docs/PORTING_NOTES.md).
 
 Real and synthetic: the programs and the kernel are real; the load is a synthetic busy loop and the work is a
 calibrated loop of about 1 ms.
@@ -110,8 +115,8 @@ An application selects the middleware with `RMW_IMPLEMENTATION=rmw_qnx` and noth
 | Guest image and boot scripts | Done |
 | ROS 2 Jazzy subset cross-built for QNX x86_64 | rclcpp, rcl, Cyclone DDS and the interfaces build with QNX's patches ([`qnx/ros2/build.sh`](qnx/ros2/build.sh)); Fast DDS not built yet |
 | rmw_qnx services, wait sets, guard conditions | Run in the guest by the inversion scenario (200 calls per run) |
-| rmw_qnx topic endpoints | Created with their QoS and gid; publish drops, take finds nothing |
-| rmw_qnx topic data, graph (`/dev/ros2`), QoS events, graph queries | Not implemented: their entry points return `RMW_RET_UNSUPPORTED` |
+| rmw_qnx topics | Carried for types with C++ introspection type support (20 of 20 in the chatter check); types with only the C type support (rcl's `/rosout`) are created but carry nothing |
+| rmw_qnx graph (`/dev/ros2`), QoS events, graph queries | Not implemented: their entry points return `RMW_RET_UNSUPPORTED` |
 | `test_rmw_implementation`, `test_communication`, `pendulum_control` | Not run |
 | Latency against Fast DDS and Cyclone DDS | Not measured |
 
