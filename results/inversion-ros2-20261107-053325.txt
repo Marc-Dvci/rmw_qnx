@@ -1,0 +1,25 @@
+# inversion through ROS 2, QEMU, WHPX, 2 vCPUs, measured threads pinned to CPU 0; 2026-11-07T04:33:25Z
+## repeat 1 rmw_cyclonedds_cpp load=0
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=1738.4 max_us=2536.8 load=0
+## repeat 1 rmw_cyclonedds_cpp load=1
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=1297.1 max_us=14413.7 load=1
+## repeat 1 rmw_qnx load=0
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=200 p50_us=1372.7 max_us=1671.2 load=0
+## repeat 1 rmw_qnx load=1
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=80 server_ran_first=80 load_ran_first=0 served_at_client_prio=200 p50_us=1727.7 max_us=2054.3 load=1
+## repeat 2 rmw_cyclonedds_cpp load=0
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=1434.2 max_us=1983.5 load=0
+## repeat 2 rmw_cyclonedds_cpp load=1
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=1281.6 max_us=14793.4 load=1
+## repeat 2 rmw_qnx load=0
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=200 p50_us=1072.6 max_us=1692.3 load=0
+## repeat 2 rmw_qnx load=1
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=80 server_ran_first=80 load_ran_first=0 served_at_client_prio=200 p50_us=1441.5 max_us=2469.9 load=1
+## repeat 3 rmw_cyclonedds_cpp load=0
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=1949.5 max_us=2709.0 load=0
+## repeat 3 rmw_cyclonedds_cpp load=1
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=1210.9 max_us=17395.0 load=1
+## repeat 3 rmw_qnx load=0
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=200 p50_us=1252.6 max_us=3656.2 load=0
+## repeat 3 rmw_qnx load=1
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=1 lost=0 contended=80 server_ran_first=80 load_ran_first=0 served_at_client_prio=200 p50_us=1452.1 max_us=5026.0 load=1

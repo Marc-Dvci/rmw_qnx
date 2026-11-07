@@ -57,3 +57,39 @@ def test_the_recorded_udp_run_shows_the_load_running_first() -> None:
     d = Path(__file__).resolve().parents[2] / "results" / "trace-20261107-003244"
     pinv = (d / "udp.pinv").read_text(encoding="utf-8")
     assert "load_ran_first=20" in pinv
+
+
+CPS = 1000  # one cycle per millisecond, so durations below read in ms
+
+
+def thread_runs(*events: tuple[int, int, int, int]) -> list[tuple[int, int, int, int]]:
+    return sorted(events)
+
+
+def test_a_load_that_holds_the_cpu_before_the_server_thread_is_counted() -> None:
+    runs = thread_runs((0, CLIENT, 1, 20), (1, LOAD, 1, 15), (13, SERVER, 1, 10), (14, CLIENT, 1, 20))
+    s = ts.summarise_threads(runs, CLIENT, SERVER, LOAD, CPS)
+    assert (s.waits, s.load_held_first) == (1, 1)
+    assert s.load_ms_max == 12.0
+
+
+def test_a_brief_load_run_before_an_inheriting_server_is_not_counted() -> None:
+    runs = thread_runs((0, CLIENT, 1, 20), (1.0, LOAD, 1, 15), (1.1, SERVER, 1, 20), (2.1, CLIENT, 1, 20))
+    s = ts.summarise_threads(runs, CLIENT, SERVER, LOAD, CPS)
+    assert (s.waits, s.load_held_first) == (1, 0)
+
+
+def test_the_middlewares_other_threads_neither_end_a_wait_nor_count_as_the_server() -> None:
+    runs = thread_runs(
+        (0, CLIENT, 1, 20), (1, CLIENT, 4, 20), (2, SERVER, 3, 10), (3, LOAD, 1, 15), (16, SERVER, 1, 10),
+        (17, CLIENT, 1, 20),
+    )
+    s = ts.summarise_threads(runs, CLIENT, SERVER, LOAD, CPS)
+    assert (s.waits, s.load_held_first) == (1, 1)
+    assert s.server_prios == {10: 1}
+
+
+def test_time_before_the_clients_first_run_is_not_a_request_wait() -> None:
+    runs = thread_runs((0, LOAD, 1, 15), (50, SERVER, 1, 10), (51, CLIENT, 1, 20))
+    s = ts.summarise_threads(runs, CLIENT, SERVER, LOAD, CPS)
+    assert s.waits == 0
