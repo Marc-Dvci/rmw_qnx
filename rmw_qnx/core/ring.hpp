@@ -22,8 +22,8 @@ struct RingHeader {
   uint32_t magic;
   uint32_t slot_payload;  // bytes of payload per slot
   uint32_t slot_count;
-  uint32_t reserved;
-  std::atomic<uint64_t> next_seq;  // sequence the next write takes
+  std::atomic<uint32_t> generation;  // bumped when a subscriber joins or leaves, so publishers know to look again
+  std::atomic<uint64_t> next_seq;    // sequence the next write takes
 };
 
 struct SlotHeader {
@@ -59,7 +59,7 @@ class Ring {
     auto *h = static_cast<RingHeader *>(mem);
     h->slot_payload = payload;
     h->slot_count = count;
-    h->reserved = 0;
+    h->generation.store(0, std::memory_order_relaxed);
     h->next_seq.store(0, std::memory_order_relaxed);
     Ring r(mem);
     for (uint32_t i = 0; i < count; i++) {
@@ -79,6 +79,8 @@ class Ring {
   uint32_t payload() const { return h_->slot_payload; }
   uint32_t count() const { return h_->slot_count; }
   uint64_t head() const { return h_->next_seq.load(std::memory_order_acquire); }
+  uint32_t generation() const { return h_->generation.load(std::memory_order_acquire); }
+  void bump_generation() { h_->generation.fetch_add(1, std::memory_order_acq_rel); }
 
   // Writes one message. Returns its sequence, or UINT64_MAX if it does not fit a slot (nothing is written).
   uint64_t write(const void *data, uint32_t length, uint64_t stamp_ns = 0) {
