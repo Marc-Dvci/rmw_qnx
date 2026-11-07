@@ -1,6 +1,6 @@
-"""Render a Mermaid or SVG source to a committed PNG at twice its size (default: docs/priority_path.svg).
+"""Render a Mermaid or SVG source to a committed PNG at twice its size (default: docs/priority-path.svg).
 
-    python scripts/render_diagram.py [docs/architecture.mmd | docs/priority_path.svg]
+    python scripts/render_diagram.py [docs/architecture.mmd | docs/priority-path.svg]
 
 A committed image loads wherever the README is read; GitHub's own Mermaid renderer can refuse a diagram that other
 Mermaid versions draw. Needs Playwright with Chromium: pip install -r requirements-dev.txt, then
@@ -35,7 +35,7 @@ INIT = (
 
 
 def main() -> None:
-    src = (Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs/priority_path.svg").resolve()
+    src = (Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs/priority-path.svg").resolve()
     out = src.with_suffix(".png")
     if src.suffix == ".svg":
         with sync_playwright() as p:

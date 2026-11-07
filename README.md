@@ -90,9 +90,9 @@ passing runs the receiving thread at the sender's priority. This project puts RO
 
 ## How it works
 
-![A service call on rmw_qnx: the calling thread at 20 pulses the sender thread, which runs at 20 and does MsgSend; the server's executor thread, priority 10, receives it and runs the callback at 20; a busy process at 15 waits](docs/priority_path.png)
+![A service call on rmw_qnx: the calling thread at 20 pulses the sender thread, which runs at 20 and does MsgSend; the server's executor thread, priority 10, receives it and runs the callback at 20; a busy process at 15 waits](docs/priority-path.png)
 
-([source](docs/priority_path.svg), rendered with `python scripts/render_diagram.py docs/priority_path.svg`)
+([source](docs/priority-path.svg), rendered with `python scripts/render_diagram.py docs/priority-path.svg`)
 
 Topics take a different path: the publisher writes a shared-memory ring per topic and sends each subscriber a pulse
 at that subscriber's own priority. `/dev/ros2` (ros2graphd, a resource manager) reads the rings, the service

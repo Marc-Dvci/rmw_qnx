@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="860" height="560" viewBox="0 0 860 560" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-  <!-- Source of docs/priority_path.png: python scripts/render_diagram.py docs/priority_path.svg -->
+  <!-- Source of docs/priority-path.png: python scripts/render_diagram.py docs/priority-path.svg -->
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#1f2328"/>
