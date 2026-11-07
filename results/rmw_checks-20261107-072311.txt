@@ -1,0 +1,15 @@
+# rmw_qnx guest checks, QEMU, WHPX, 2 vCPUs; 2026-11-07T06:23:11Z
+  request from priority 20 served at priority 20
+  request from priority 10 served at priority 10
+PASS two_callers_on_one_client_are_each_served_at_their_own_priority
+PASS the_33rd_subscription_on_a_topic_fails_and_leaves_32_registered
+PASS a_forged_nested_sequence_length_is_rejected
+PASS a_null_buffer_with_a_length_is_rejected
+  /dev/ros2 checked: yes
+PASS a_destroyed_topic_is_gone_and_its_name_takes_another_type
+  400 rounds: 0 endpoint creations failed, 0 publications not received
+PASS endpoints_coming_and_going_on_one_topic_never_split_it
+  2 nodes listed, the other process's among them: yes
+PASS graph_queries_see_another_process_and_its_end
+checks: 7 passed, 0 failed
+exit=0

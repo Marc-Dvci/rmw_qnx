@@ -12,6 +12,7 @@
 //   caller thread (P) --MsgSendPulse(prio -1 = P)--> client's sender thread, which now runs at P
 //   sender thread (P) --MsgSend--> context channel of the server; the thread blocked in MsgReceive inside rmw_wait
 //   takes priority P, returns to the executor, runs the callback, and rmw_send_response does MsgReply.
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -28,6 +29,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <set>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -35,6 +37,7 @@
 #include <vector>
 
 #include "cdr.hpp"
+#include "graph.hpp"
 #include "names.hpp"
 #include "qos.hpp"
 #include "sendq.hpp"
@@ -52,7 +55,11 @@
 #include "rmw/get_topic_names_and_types.h"
 #include "rmw/impl/cpp/macros.hpp"
 #include "rmw/rmw.h"
+#include "rmw/sanity_checks.h"
 #include "rmw/serialized_message.h"
+#include "rmw/topic_endpoint_info_array.h"
+#include "rosidl_typesupport_introspection_c/message_introspection.h"
+#include "rosidl_typesupport_introspection_c/service_introspection.h"
 #include "rmw/validate_full_topic_name.h"
 #include "rmw/validate_namespace.h"
 #include "rmw/validate_node_name.h"
@@ -153,6 +160,13 @@ struct rmw_context_impl_s {
   std::map<uint32_t, SubscriptionImpl *> subs;
   uint32_t next_sub = 1;
   bool shutdown = false;
+  // This context's part of the graph, written to graph_path for every process to read (core/graph.hpp).
+  std::mutex graph_mu;
+  std::string graph_path;
+  std::map<uint64_t, rmw_qnx::core::NodeEntry> my_nodes;
+  std::map<uint64_t, rmw_qnx::core::Endpoint> my_endpoints;
+  uint64_t next_graph_id = 1;
+  std::vector<GuardCondition *> graph_gcs;  // of this context's nodes, triggered on every graph change
 };
 
 struct SubscriptionImpl {
@@ -165,6 +179,7 @@ struct SubscriptionImpl {
   rmw_qos_profile_t qos{};
   uint8_t gid[RMW_GID_STORAGE_SIZE] = {};
   std::mutex mu;
+  uint64_t graph_id = 0;
   uint64_t pos = 0;  // next ring sequence this subscription takes
   Waitable w;
   bool has_data() {
@@ -177,12 +192,25 @@ struct SubscriptionImpl {
 namespace {
 
 constexpr int kPulseTopic = _PULSE_CODE_MINAVAIL + 3;
+constexpr int kPulseGraph = _PULSE_CODE_MINAVAIL + 4;
+
+void trigger_graph(rmw_context_impl_s *ctx) {
+  std::lock_guard<std::mutex> l(ctx->graph_mu);
+  for (GuardCondition *g : ctx->graph_gcs) {
+    g->triggered = true;
+    g->w.notify();
+  }
+}
 
 void relay_main(rmw_context_impl_s *ctx) {
   for (;;) {
     _pulse p;
     if (MsgReceivePulse(ctx->topic_chid, &p, sizeof p, nullptr) == -1) continue;
     if (p.code == kPulseQuit) return;
+    if (p.code == kPulseGraph) {
+      trigger_graph(ctx);
+      continue;
+    }
     if (p.code != kPulseTopic) continue;
     // This thread now runs at the priority the subscriber registered with.
     std::lock_guard<std::mutex> l(ctx->mu);
@@ -218,6 +246,7 @@ struct ServiceImpl {
   std::deque<Pending> queue;
   std::map<std::pair<std::string, int64_t>, rcvid_t> inflight;
   Waitable w;
+  uint64_t graph_id = 0;
 };
 
 struct Response {
@@ -244,6 +273,7 @@ struct ClientImpl {
   pid_t srv_pid = 0;
   int srv_chid = -1;
   uint32_t srv_index = 0;
+  uint64_t graph_id = 0;
 };
 
 struct WaitSetImpl {
@@ -252,8 +282,9 @@ struct WaitSetImpl {
 };
 
 struct NodeImpl {
-  GuardCondition graph;  // not triggered yet: graph events come with the /dev/ros2 resource manager
+  GuardCondition graph;  // triggered on every change to the graph of this domain
   rmw_guard_condition_t handle;
+  uint64_t graph_id = 0;
 };
 
 bool read_registry(const std::string &path, pid_t *pid, int *chid, uint32_t *index) {
@@ -278,6 +309,148 @@ void mkdirs(const std::string &path) {
 
 std::string registry_path(rmw_context_impl_s *ctx, const char *service_name) {
   return ctx->dir + "/" + rmw_qnx::core::encode_name(service_name);
+}
+
+// ---- graph ----
+//
+// Each context writes its nodes and endpoints to /tmp/rmwqnx/d<domain>/graph/<pid>.<n> (written to a temporary
+// name and renamed, so a reader sees a whole file). A query reads every file whose process is alive. After each
+// change the writer pulses every other context listed, whose relay thread then triggers its nodes' graph guard
+// conditions; ros2graphd reads the same files for /dev/ros2/nodes.
+
+std::string graph_dir(size_t domain) { return "/tmp/rmwqnx/d" + std::to_string(domain) + "/graph"; }
+
+std::vector<rmw_qnx::core::GraphPart> read_graph(size_t domain) {
+  std::vector<rmw_qnx::core::GraphPart> out;
+  const std::string dir = graph_dir(domain);
+  DIR *d = opendir(dir.c_str());
+  if (!d) return out;
+  while (dirent *e = readdir(d)) {
+    const std::string n = e->d_name;
+    if (n.empty() || n[0] == '.' || n.find(".tmp") != std::string::npos) continue;
+    std::ifstream f(dir + "/" + n);
+    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    rmw_qnx::core::GraphPart p;
+    if (!rmw_qnx::core::read_part(text, &p)) continue;
+    if (p.pid != getpid() && kill(pid_t(p.pid), 0) != 0 && errno == ESRCH) continue;  // its process is gone
+    out.push_back(std::move(p));
+  }
+  closedir(d);
+  return out;
+}
+
+rmw_qnx::core::Graph load_graph(size_t domain) {
+  rmw_qnx::core::Graph g;
+  for (auto &p : read_graph(domain)) {
+    for (auto &n : p.nodes) g.add_node(uint64_t(p.pid), n);
+    for (auto &e : p.endpoints) g.add_endpoint(uint64_t(p.pid), e);
+  }
+  return g;
+}
+
+void publish_graph(rmw_context_impl_s *ctx) {
+  rmw_qnx::core::GraphPart part;
+  part.pid = getpid();
+  part.chid = ctx->topic_chid;
+  {
+    std::lock_guard<std::mutex> l(ctx->graph_mu);
+    for (auto &kv : ctx->my_nodes) part.nodes.push_back(kv.second);
+    for (auto &kv : ctx->my_endpoints) part.endpoints.push_back(kv.second);
+  }
+  const std::string tmp = ctx->graph_path + ".tmp";
+  {
+    std::ofstream f(tmp);
+    f << rmw_qnx::core::write_part(part);
+  }
+  rename(tmp.c_str(), ctx->graph_path.c_str());
+  trigger_graph(ctx);
+  for (const auto &p : read_graph(ctx->domain)) {
+    if (p.pid == part.pid && p.chid == part.chid) continue;
+    const int coid = ConnectAttach(0, pid_t(p.pid), int(p.chid), _NTO_SIDE_CHANNEL, 0);
+    if (coid == -1) continue;
+    MsgSendPulse(coid, -1, kPulseGraph, 0);
+    ConnectDetach(coid);
+  }
+}
+
+uint64_t graph_add_node(rmw_context_impl_s *ctx, const char *name, const char *ns, GuardCondition *gc) {
+  uint64_t id;
+  {
+    std::lock_guard<std::mutex> l(ctx->graph_mu);
+    id = ctx->next_graph_id++;
+    ctx->my_nodes[id] = rmw_qnx::core::NodeEntry{name, ns, "/"};
+    ctx->graph_gcs.push_back(gc);
+  }
+  publish_graph(ctx);
+  return id;
+}
+
+uint64_t graph_add_endpoint(const rmw_node_t *node, rmw_qnx::core::EndpointKind kind, const char *name,
+                            const std::string &type, const uint8_t *gid, const rmw_qos_profile_t &q) {
+  rmw_context_impl_s *ctx = node->context->impl;
+  rmw_qnx::core::Endpoint e{};
+  e.kind = kind;
+  e.name = name;
+  e.type = type;
+  e.node_name = node->name;
+  e.node_namespace = node->namespace_;
+  std::memcpy(e.gid, gid, 16);
+  e.qos[0] = q.reliability;
+  e.qos[1] = q.durability;
+  e.qos[2] = q.history;
+  e.qos[3] = int64_t(q.depth);
+  e.qos[4] = q.liveliness;
+  uint64_t id;
+  {
+    std::lock_guard<std::mutex> l(ctx->graph_mu);
+    id = ctx->next_graph_id++;
+    ctx->my_endpoints[id] = e;
+  }
+  publish_graph(ctx);
+  return id;
+}
+
+void graph_remove(rmw_context_impl_s *ctx, uint64_t id, GuardCondition *gc = nullptr) {
+  {
+    std::lock_guard<std::mutex> l(ctx->graph_mu);
+    ctx->my_nodes.erase(id);
+    ctx->my_endpoints.erase(id);
+    if (gc) ctx->graph_gcs.erase(std::remove(ctx->graph_gcs.begin(), ctx->graph_gcs.end(), gc), ctx->graph_gcs.end());
+  }
+  publish_graph(ctx);
+}
+
+std::string ros_type(std::string ns, const std::string &name) {
+  for (const char *sep : {"::", "__"})
+    for (size_t i; (i = ns.find(sep)) != std::string::npos;) ns.replace(i, 2, "/");
+  return ns + "/" + name;
+}
+
+// The ROS type name of a message or service type support, from whichever introspection it offers.
+std::string message_type_name(const rosidl_message_type_support_t *ts) {
+  std::string out;
+  if (const auto *h = get_message_typesupport_handle(ts, its::typesupport_identifier)) {
+    const auto *m = static_cast<const its::MessageMembers *>(h->data);
+    out = ros_type(m->message_namespace_, m->message_name_);
+  } else if (const auto *c = get_message_typesupport_handle(ts, "rosidl_typesupport_introspection_c")) {
+    const auto *m = static_cast<const rosidl_typesupport_introspection_c__MessageMembers *>(c->data);
+    out = ros_type(m->message_namespace_, m->message_name_);
+  }
+  rmw_reset_error();
+  return out;
+}
+
+std::string service_type_name(const rosidl_service_type_support_t *ts) {
+  std::string out;
+  if (const auto *h = get_service_typesupport_handle(ts, its::typesupport_identifier)) {
+    const auto *m = static_cast<const its::ServiceMembers *>(h->data);
+    out = ros_type(m->service_namespace_, m->service_name_);
+  } else if (const auto *c = get_service_typesupport_handle(ts, "rosidl_typesupport_introspection_c")) {
+    const auto *m = static_cast<const rosidl_typesupport_introspection_c__ServiceMembers *>(c->data);
+    out = ros_type(m->service_namespace_, m->service_name_);
+  }
+  rmw_reset_error();
+  return out;
 }
 
 void sender_main(ClientImpl *c) {
@@ -585,6 +758,9 @@ rmw_ret_t rmw_init(const rmw_init_options_t *o, rmw_context_t *ctx) {
   impl->topic_chid = ChannelCreate(0);
   impl->topic_coid = ConnectAttach(0, 0, impl->topic_chid, _NTO_SIDE_CHANNEL, 0);
   impl->relay = std::thread(relay_main, impl.get());
+  static std::atomic<int> contexts{0};
+  mkdirs(graph_dir(domain));
+  impl->graph_path = graph_dir(domain) + "/" + std::to_string(getpid()) + "." + std::to_string(contexts++);
   ctx->instance_id = o->instance_id;
   ctx->implementation_identifier = kId;
   ctx->actual_domain_id = domain;
@@ -618,6 +794,7 @@ rmw_ret_t rmw_context_fini(rmw_context_t *ctx) {
     RMW_SET_ERROR_MSG("context has not been shutdown");
     return RMW_RET_INVALID_ARGUMENT;
   }
+  unlink(ctx->impl->graph_path.c_str());
   MsgSendPulse(ctx->impl->topic_coid, -1, kPulseQuit, 0);
   ctx->impl->relay.join();
   ConnectDetach(ctx->impl->topic_coid);
@@ -665,15 +842,18 @@ rmw_node_t *rmw_create_node(rmw_context_t *ctx, const char *name, const char *ns
   impl->handle.data = &impl->graph;
   impl->handle.context = ctx;
   node->data = impl;
+  impl->graph_id = graph_add_node(ctx->impl, name, ns, &impl->graph);
   return node;
 }
 
 rmw_ret_t rmw_destroy_node(rmw_node_t *node) {
   CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
+  auto *ni = static_cast<NodeImpl *>(node->data);
+  graph_remove(node->context->impl, ni->graph_id, &ni->graph);
   rcutils_allocator_t a = rcutils_get_default_allocator();
   a.deallocate(const_cast<char *>(node->name), a.state);
   a.deallocate(const_cast<char *>(node->namespace_), a.state);
-  delete static_cast<NodeImpl *>(node->data);
+  delete ni;
   rmw_node_free(node);
   return RMW_RET_OK;
 }
@@ -883,6 +1063,9 @@ rmw_service_t *rmw_create_service(const rmw_node_t *node, const rosidl_service_t
   srv->implementation_identifier = kId;
   srv->data = s;
   srv->service_name = rcutils_strdup(name, rcutils_get_default_allocator());
+  uint8_t gid[RMW_GID_STORAGE_SIZE];
+  make_gid(ctx, gid);
+  s->graph_id = graph_add_endpoint(node, rmw_qnx::core::EndpointKind::kService, name, service_type_name(ts), gid, *qos);
   return srv;
 }
 
@@ -890,6 +1073,7 @@ rmw_ret_t rmw_destroy_service(rmw_node_t *node, rmw_service_t *srv) {
   CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(srv, RMW_RET_INVALID_ARGUMENT);
   auto *s = static_cast<ServiceImpl *>(srv->data);
+  graph_remove(s->ctx, s->graph_id);
   {
     std::lock_guard<std::mutex> l(s->ctx->mu);
     s->ctx->services.erase(s->index);
@@ -1013,6 +1197,7 @@ rmw_client_t *rmw_create_client(const rmw_node_t *node, const rosidl_service_typ
   cli->implementation_identifier = kId;
   cli->data = c;
   cli->service_name = rcutils_strdup(name, rcutils_get_default_allocator());
+  c->graph_id = graph_add_endpoint(node, rmw_qnx::core::EndpointKind::kClient, name, service_type_name(ts), c->gid, *qos);
   return cli;
 }
 
@@ -1020,6 +1205,7 @@ rmw_ret_t rmw_destroy_client(rmw_node_t *node, rmw_client_t *cli) {
   CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(cli, RMW_RET_INVALID_ARGUMENT);
   auto *c = static_cast<ClientImpl *>(cli->data);
+  graph_remove(c->ctx, c->graph_id);
   MsgSendPulse(c->coid, -1, kPulseQuit, 0);
   c->sender.join();
   if (c->srv_coid != -1) ConnectDetach(c->srv_coid);
@@ -1174,6 +1360,8 @@ struct PublisherImpl {
   rmw_qos_profile_t qos{};
   uint8_t gid[RMW_GID_STORAGE_SIZE] = {};
   std::atomic<uint64_t> seq{1};
+  rmw_context_impl_s *ctx = nullptr;
+  uint64_t graph_id = 0;
 };
 
 // The C++ introspection members of a message type, or nullptr if it has none.
@@ -1225,6 +1413,8 @@ rmw_publisher_t *rmw_create_publisher(const rmw_node_t *node, const rosidl_messa
   if (e->topic) e->topic->add_publisher();
   e->qos = resolve(*qos);
   make_gid(node->context->impl, e->gid);
+  e->ctx = node->context->impl;
+  e->graph_id = graph_add_endpoint(node, rmw_qnx::core::EndpointKind::kPublisher, name, message_type_name(ts), e->gid, e->qos);
   rmw_publisher_t *p = rmw_publisher_allocate();
   p->implementation_identifier = kId;
   p->data = e.release();
@@ -1237,6 +1427,7 @@ rmw_ret_t rmw_destroy_publisher(rmw_node_t *node, rmw_publisher_t *p) {
   CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
   auto *e = static_cast<PublisherImpl *>(p->data);
+  graph_remove(e->ctx, e->graph_id);
   if (e->topic) e->topic->remove_publisher();
   delete e;
   rcutils_allocator_t a = rcutils_get_default_allocator();
@@ -1354,6 +1545,7 @@ rmw_subscription_t *rmw_create_subscription(const rmw_node_t *node, const rosidl
       return nullptr;
     }
   }
+  s->graph_id = graph_add_endpoint(node, rmw_qnx::core::EndpointKind::kSubscription, name, message_type_name(ts), s->gid, s->qos);
   rmw_subscription_t *sub = rmw_subscription_allocate();
   sub->implementation_identifier = kId;
   sub->data = s;
@@ -1367,6 +1559,7 @@ rmw_ret_t rmw_destroy_subscription(rmw_node_t *node, rmw_subscription_t *sub) {
   CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(sub, RMW_RET_INVALID_ARGUMENT);
   auto *s = static_cast<SubscriptionImpl *>(sub->data);
+  graph_remove(s->ctx, s->graph_id);
   if (s->topic) s->topic->remove_subscriber(s->slot);
   {
     std::lock_guard<std::mutex> l(s->ctx->mu);
@@ -1569,47 +1762,227 @@ rmw_ret_t rmw_take_event(const rmw_event_t *ev, void *info, bool *taken) {
   return RMW_RET_OK;
 }
 bool rmw_event_type_is_supported(rmw_event_type_t) { return false; }
-rmw_ret_t rmw_get_publisher_names_and_types_by_node(const rmw_node_t *, rcutils_allocator_t *, const char *,
-                                                    const char *, bool, rmw_names_and_types_t *) {
-  return unsupported("graph queries");
+// ---- graph queries: answered from every live context's graph file ----
+
+static rmw_ret_t check_query_node(const rmw_node_t *node) {
+  RMW_CHECK_ARGUMENT_FOR_NULL(node, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(node->implementation_identifier, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_TYPE_IDENTIFIERS_MATCH(node, node->implementation_identifier, kId,
+                                   return RMW_RET_INCORRECT_RMW_IMPLEMENTATION);
+  return RMW_RET_OK;
 }
-rmw_ret_t rmw_get_subscriber_names_and_types_by_node(const rmw_node_t *, rcutils_allocator_t *, const char *,
-                                                     const char *, bool, rmw_names_and_types_t *) {
-  return unsupported("graph queries");
+
+static rmw_ret_t check_allocator(rcutils_allocator_t *a) {
+  RMW_CHECK_ARGUMENT_FOR_NULL(a, RMW_RET_INVALID_ARGUMENT);
+  RCUTILS_CHECK_ALLOCATOR_WITH_MSG(a, "allocator argument is invalid", return RMW_RET_INVALID_ARGUMENT);
+  return RMW_RET_OK;
 }
-rmw_ret_t rmw_get_service_names_and_types_by_node(const rmw_node_t *, rcutils_allocator_t *, const char *,
-                                                  const char *, rmw_names_and_types_t *) {
-  return unsupported("graph queries");
+
+static rmw_ret_t fill_names_and_types(const std::map<std::string, std::set<std::string>> &m, rcutils_allocator_t *a,
+                                      rmw_names_and_types_t *out) {
+  if (m.empty()) return RMW_RET_OK;
+  rmw_ret_t r = rmw_names_and_types_init(out, m.size(), a);
+  if (r != RMW_RET_OK) return r;
+  size_t i = 0;
+  for (const auto &kv : m) {
+    out->names.data[i] = rcutils_strdup(kv.first.c_str(), *a);
+    if (!out->names.data[i] || rcutils_string_array_init(&out->types[i], kv.second.size(), a) != RCUTILS_RET_OK) {
+      rmw_names_and_types_fini(out);
+      RMW_SET_ERROR_MSG("rmw_qnx: out of memory");
+      return RMW_RET_BAD_ALLOC;
+    }
+    size_t j = 0;
+    for (const auto &t : kv.second) {
+      out->types[i].data[j] = rcutils_strdup(t.c_str(), *a);
+      if (!out->types[i].data[j++]) {
+        rmw_names_and_types_fini(out);
+        RMW_SET_ERROR_MSG("rmw_qnx: out of memory");
+        return RMW_RET_BAD_ALLOC;
+      }
+    }
+    i++;
+  }
+  return RMW_RET_OK;
 }
-rmw_ret_t rmw_get_client_names_and_types_by_node(const rmw_node_t *, rcutils_allocator_t *, const char *,
-                                                 const char *, rmw_names_and_types_t *) {
-  return unsupported("graph queries");
+
+static rmw_ret_t names_and_types_by_node(const rmw_node_t *node, rcutils_allocator_t *a, const char *node_name,
+                                         const char *node_ns, rmw_names_and_types_t *out,
+                                         rmw_qnx::core::EndpointKind kind) {
+  rmw_ret_t r = check_query_node(node);
+  if (r != RMW_RET_OK) return r;
+  if ((r = check_allocator(a)) != RMW_RET_OK) return r;
+  RMW_CHECK_ARGUMENT_FOR_NULL(node_name, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(node_ns, RMW_RET_INVALID_ARGUMENT);
+  int v = 0;
+  if (rmw_validate_node_name(node_name, &v, nullptr) != RMW_RET_OK) return RMW_RET_ERROR;
+  if (v != RMW_NODE_NAME_VALID) {
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("invalid node name: %s", rmw_node_name_validation_result_string(v));
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if (rmw_validate_namespace(node_ns, &v, nullptr) != RMW_RET_OK) return RMW_RET_ERROR;
+  if (v != RMW_NAMESPACE_VALID) {
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("invalid node namespace: %s", rmw_namespace_validation_result_string(v));
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  if ((r = rmw_names_and_types_check_zero(out)) != RMW_RET_OK) return r;
+  const rmw_qnx::core::Graph g = load_graph(node->context->impl->domain);
+  if (!g.node_exists(node_name, node_ns)) {
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("node %s in namespace %s does not exist", node_name, node_ns);
+    return RMW_RET_NODE_NAME_NON_EXISTENT;
+  }
+  const std::string n = node_name, ns = node_ns;
+  return fill_names_and_types(g.names_and_types({kind}, &n, &ns), a, out);
 }
-rmw_ret_t rmw_get_topic_names_and_types(const rmw_node_t *, rcutils_allocator_t *, bool, rmw_names_and_types_t *) {
-  return unsupported("graph queries");
+
+rmw_ret_t rmw_get_publisher_names_and_types_by_node(const rmw_node_t *node, rcutils_allocator_t *a,
+                                                    const char *node_name, const char *node_ns, bool,
+                                                    rmw_names_and_types_t *out) {
+  return names_and_types_by_node(node, a, node_name, node_ns, out, rmw_qnx::core::EndpointKind::kPublisher);
 }
-rmw_ret_t rmw_get_service_names_and_types(const rmw_node_t *, rcutils_allocator_t *, rmw_names_and_types_t *) {
-  return unsupported("graph queries");
+rmw_ret_t rmw_get_subscriber_names_and_types_by_node(const rmw_node_t *node, rcutils_allocator_t *a,
+                                                     const char *node_name, const char *node_ns, bool,
+                                                     rmw_names_and_types_t *out) {
+  return names_and_types_by_node(node, a, node_name, node_ns, out, rmw_qnx::core::EndpointKind::kSubscription);
 }
-rmw_ret_t rmw_get_node_names(const rmw_node_t *, rcutils_string_array_t *, rcutils_string_array_t *) {
-  return unsupported("graph queries");
+rmw_ret_t rmw_get_service_names_and_types_by_node(const rmw_node_t *node, rcutils_allocator_t *a,
+                                                  const char *node_name, const char *node_ns,
+                                                  rmw_names_and_types_t *out) {
+  return names_and_types_by_node(node, a, node_name, node_ns, out, rmw_qnx::core::EndpointKind::kService);
 }
-rmw_ret_t rmw_get_node_names_with_enclaves(const rmw_node_t *, rcutils_string_array_t *, rcutils_string_array_t *,
-                                           rcutils_string_array_t *) {
-  return unsupported("graph queries");
+rmw_ret_t rmw_get_client_names_and_types_by_node(const rmw_node_t *node, rcutils_allocator_t *a,
+                                                 const char *node_name, const char *node_ns,
+                                                 rmw_names_and_types_t *out) {
+  return names_and_types_by_node(node, a, node_name, node_ns, out, rmw_qnx::core::EndpointKind::kClient);
 }
-rmw_ret_t rmw_count_publishers(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
-rmw_ret_t rmw_count_subscribers(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
-rmw_ret_t rmw_count_clients(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
-rmw_ret_t rmw_count_services(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
+
+static rmw_ret_t all_names_and_types(const rmw_node_t *node, rcutils_allocator_t *a, rmw_names_and_types_t *out,
+                                     std::set<rmw_qnx::core::EndpointKind> kinds) {
+  rmw_ret_t r = check_query_node(node);
+  if (r != RMW_RET_OK) return r;
+  if ((r = check_allocator(a)) != RMW_RET_OK) return r;
+  if ((r = rmw_names_and_types_check_zero(out)) != RMW_RET_OK) return r;
+  return fill_names_and_types(load_graph(node->context->impl->domain).names_and_types(kinds), a, out);
+}
+
+rmw_ret_t rmw_get_topic_names_and_types(const rmw_node_t *node, rcutils_allocator_t *a, bool,
+                                        rmw_names_and_types_t *out) {
+  return all_names_and_types(node, a, out,
+                             {rmw_qnx::core::EndpointKind::kPublisher, rmw_qnx::core::EndpointKind::kSubscription});
+}
+rmw_ret_t rmw_get_service_names_and_types(const rmw_node_t *node, rcutils_allocator_t *a, rmw_names_and_types_t *out) {
+  return all_names_and_types(node, a, out,
+                             {rmw_qnx::core::EndpointKind::kService, rmw_qnx::core::EndpointKind::kClient});
+}
+
+static rmw_ret_t node_names(const rmw_node_t *node, rcutils_string_array_t *names, rcutils_string_array_t *nss,
+                            rcutils_string_array_t *enclaves) {
+  rmw_ret_t r = check_query_node(node);
+  if (r != RMW_RET_OK) return r;
+  if (rmw_check_zero_rmw_string_array(names) != RMW_RET_OK) return RMW_RET_INVALID_ARGUMENT;
+  if (rmw_check_zero_rmw_string_array(nss) != RMW_RET_OK) return RMW_RET_INVALID_ARGUMENT;
+  if (enclaves && rmw_check_zero_rmw_string_array(enclaves) != RMW_RET_OK) return RMW_RET_INVALID_ARGUMENT;
+  const auto nodes = load_graph(node->context->impl->domain).nodes();
+  rcutils_allocator_t a = rcutils_get_default_allocator();
+  if (rcutils_string_array_init(names, nodes.size(), &a) != RCUTILS_RET_OK ||
+      rcutils_string_array_init(nss, nodes.size(), &a) != RCUTILS_RET_OK ||
+      (enclaves && rcutils_string_array_init(enclaves, nodes.size(), &a) != RCUTILS_RET_OK)) {
+    RMW_SET_ERROR_MSG("rmw_qnx: out of memory");
+    return RMW_RET_BAD_ALLOC;
+  }
+  for (size_t i = 0; i < nodes.size(); i++) {
+    names->data[i] = rcutils_strdup(nodes[i].name.c_str(), a);
+    nss->data[i] = rcutils_strdup(nodes[i].ns.c_str(), a);
+    if (enclaves) enclaves->data[i] = rcutils_strdup(nodes[i].enclave.c_str(), a);
+  }
+  return RMW_RET_OK;
+}
+
+rmw_ret_t rmw_get_node_names(const rmw_node_t *node, rcutils_string_array_t *names, rcutils_string_array_t *nss) {
+  return node_names(node, names, nss, nullptr);
+}
+rmw_ret_t rmw_get_node_names_with_enclaves(const rmw_node_t *node, rcutils_string_array_t *names,
+                                           rcutils_string_array_t *nss, rcutils_string_array_t *enclaves) {
+  RMW_CHECK_ARGUMENT_FOR_NULL(enclaves, RMW_RET_INVALID_ARGUMENT);
+  return node_names(node, names, nss, enclaves);
+}
+
+static rmw_ret_t count(const rmw_node_t *node, const char *name, size_t *n, rmw_qnx::core::EndpointKind kind) {
+  rmw_ret_t r = check_query_node(node);
+  if (r != RMW_RET_OK) return r;
+  RMW_CHECK_ARGUMENT_FOR_NULL(name, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(n, RMW_RET_INVALID_ARGUMENT);
+  int v = 0;
+  if (rmw_validate_full_topic_name(name, &v, nullptr) != RMW_RET_OK) return RMW_RET_ERROR;
+  if (v != RMW_TOPIC_VALID) {
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("invalid name: %s", rmw_full_topic_name_validation_result_string(v));
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  *n = load_graph(node->context->impl->domain).count(kind, name);
+  return RMW_RET_OK;
+}
+
+rmw_ret_t rmw_count_publishers(const rmw_node_t *node, const char *t, size_t *n) {
+  return count(node, t, n, rmw_qnx::core::EndpointKind::kPublisher);
+}
+rmw_ret_t rmw_count_subscribers(const rmw_node_t *node, const char *t, size_t *n) {
+  return count(node, t, n, rmw_qnx::core::EndpointKind::kSubscription);
+}
+rmw_ret_t rmw_count_clients(const rmw_node_t *node, const char *t, size_t *n) {
+  return count(node, t, n, rmw_qnx::core::EndpointKind::kClient);
+}
+rmw_ret_t rmw_count_services(const rmw_node_t *node, const char *t, size_t *n) {
+  return count(node, t, n, rmw_qnx::core::EndpointKind::kService);
+}
 rmw_ret_t rmw_set_log_severity(rmw_log_severity_t) { return RMW_RET_OK; }
-rmw_ret_t rmw_get_publishers_info_by_topic(const rmw_node_t *, rcutils_allocator_t *, const char *, bool,
-                                           rmw_topic_endpoint_info_array_t *) {
-  return unsupported("graph queries");
+
+static rmw_ret_t info_by_topic(const rmw_node_t *node, rcutils_allocator_t *a, const char *name,
+                               rmw_topic_endpoint_info_array_t *out, rmw_qnx::core::EndpointKind kind) {
+  rmw_ret_t r = check_query_node(node);
+  if (r != RMW_RET_OK) return r;
+  if ((r = check_allocator(a)) != RMW_RET_OK) return r;
+  RMW_CHECK_ARGUMENT_FOR_NULL(name, RMW_RET_INVALID_ARGUMENT);
+  int v = 0;
+  if (rmw_validate_full_topic_name(name, &v, nullptr) != RMW_RET_OK) return RMW_RET_ERROR;
+  if (v != RMW_TOPIC_VALID) {
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("invalid name: %s", rmw_full_topic_name_validation_result_string(v));
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  RMW_CHECK_ARGUMENT_FOR_NULL(out, RMW_RET_INVALID_ARGUMENT);
+  if (rmw_topic_endpoint_info_array_check_zero(out) != RMW_RET_OK) return RMW_RET_INVALID_ARGUMENT;
+  const auto eps = load_graph(node->context->impl->domain).endpoints(kind, name);
+  if (eps.empty()) return RMW_RET_OK;
+  if ((r = rmw_topic_endpoint_info_array_init_with_size(out, eps.size(), a)) != RMW_RET_OK) return r;
+  for (size_t i = 0; i < eps.size(); i++) {
+    rmw_topic_endpoint_info_t &info = out->info_array[i];
+    info = rmw_get_zero_initialized_topic_endpoint_info();
+    rmw_qos_profile_t q = rmw_qos_profile_default;
+    q.reliability = rmw_qos_reliability_policy_e(eps[i].qos[0]);
+    q.durability = rmw_qos_durability_policy_e(eps[i].qos[1]);
+    q.history = rmw_qos_history_policy_e(eps[i].qos[2]);
+    q.depth = size_t(eps[i].qos[3]);
+    q.liveliness = rmw_qos_liveliness_policy_e(eps[i].qos[4]);
+    if (rmw_topic_endpoint_info_set_node_name(&info, eps[i].node_name.c_str(), a) != RMW_RET_OK ||
+        rmw_topic_endpoint_info_set_node_namespace(&info, eps[i].node_namespace.c_str(), a) != RMW_RET_OK ||
+        rmw_topic_endpoint_info_set_topic_type(&info, eps[i].type.c_str(), a) != RMW_RET_OK ||
+        rmw_topic_endpoint_info_set_endpoint_type(
+            &info, kind == rmw_qnx::core::EndpointKind::kPublisher ? RMW_ENDPOINT_PUBLISHER : RMW_ENDPOINT_SUBSCRIPTION) !=
+            RMW_RET_OK ||
+        rmw_topic_endpoint_info_set_gid(&info, eps[i].gid, RMW_GID_STORAGE_SIZE) != RMW_RET_OK ||
+        rmw_topic_endpoint_info_set_qos_profile(&info, &q) != RMW_RET_OK) {
+      rmw_topic_endpoint_info_array_fini(out, a);
+      return RMW_RET_ERROR;
+    }
+  }
+  return RMW_RET_OK;
 }
-rmw_ret_t rmw_get_subscriptions_info_by_topic(const rmw_node_t *, rcutils_allocator_t *, const char *, bool,
-                                              rmw_topic_endpoint_info_array_t *) {
-  return unsupported("graph queries");
+
+rmw_ret_t rmw_get_publishers_info_by_topic(const rmw_node_t *node, rcutils_allocator_t *a, const char *t, bool,
+                                           rmw_topic_endpoint_info_array_t *out) {
+  return info_by_topic(node, a, t, out, rmw_qnx::core::EndpointKind::kPublisher);
+}
+rmw_ret_t rmw_get_subscriptions_info_by_topic(const rmw_node_t *node, rcutils_allocator_t *a, const char *t, bool,
+                                              rmw_topic_endpoint_info_array_t *out) {
+  return info_by_topic(node, a, t, out, rmw_qnx::core::EndpointKind::kSubscription);
 }
 rmw_ret_t rmw_publisher_get_network_flow_endpoints(const rmw_publisher_t *, rcutils_allocator_t *,
                                                    rmw_network_flow_endpoint_array_t *) {

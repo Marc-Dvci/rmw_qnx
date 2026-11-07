@@ -9,6 +9,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rcutils REQUIRED)
 find_package(rmw REQUIRED)
 find_package(rosidl_runtime_c REQUIRED)
+find_package(rosidl_typesupport_introspection_c REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 
 add_library(rmw_qnx SHARED src/rmw_qnx.cpp)
@@ -18,6 +19,7 @@ target_link_libraries(rmw_qnx
   rcutils::rcutils
   rmw::rmw
   rosidl_runtime_c::rosidl_runtime_c
+  rosidl_typesupport_introspection_c::rosidl_typesupport_introspection_c
   rosidl_typesupport_introspection_cpp::rosidl_typesupport_introspection_cpp)
 
 register_rmw_implementation("cpp:rosidl_typesupport_cpp:rosidl_typesupport_introspection_cpp")
@@ -36,5 +38,5 @@ install(TARGETS rmw_qnx
   RUNTIME DESTINATION bin)
 
 ament_export_libraries(rmw_qnx)
-ament_export_dependencies(rcutils rmw rosidl_runtime_c rosidl_typesupport_introspection_cpp)
+ament_export_dependencies(rcutils rmw rosidl_runtime_c rosidl_typesupport_introspection_c rosidl_typesupport_introspection_cpp)
 ament_package()

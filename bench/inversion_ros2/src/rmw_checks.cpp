@@ -26,6 +26,8 @@
 #include "rcl_interfaces/srv/get_parameters.hpp"
 #include "rcutils/strdup.h"
 #include "rmw/error_handling.h"
+#include "rmw/get_topic_names_and_types.h"
+#include "rmw/names_and_types.h"
 #include "rmw/rmw.h"
 #include "rosidl_typesupport_cpp/message_type_support.hpp"
 #include "rosidl_typesupport_cpp/service_type_support.hpp"
@@ -269,6 +271,58 @@ bool endpoints_coming_and_going_on_one_topic_never_split_it() {
   return true;
 }
 
+// Another process creates a node and a publisher: this process's graph guard condition fires, and the queries and
+// /dev/ros2/nodes (when ros2graphd runs) see them; when that process ends, they are gone.
+bool graph_queries_see_another_process_and_its_end() {
+  const auto *str = rosidl_typesupport_cpp::get_message_type_support_handle<example_interfaces::msg::String>();
+  const std::string leaf = "rmwqnx_graph_" + std::to_string(getpid());
+  const std::string topic = "/" + leaf;
+  int ready[2], done[2];
+  if (pipe(ready) != 0 || pipe(done) != 0) return false;
+  const pid_t child = fork();
+  if (child == 0) {
+    Ros r;
+    if (!r.up(("remote_" + leaf).c_str())) _exit(2);
+    rmw_qos_profile_t q = qos();
+    rmw_publisher_options_t po = rmw_get_default_publisher_options();
+    if (!rmw_create_publisher(r.node, str, topic.c_str(), &q, &po)) _exit(3);
+    char c = 1;
+    if (write(ready[1], &c, 1) != 1) _exit(4);
+    if (read(done[0], &c, 1) != 1) _exit(5);
+    _exit(0);  // without destroying anything: its process ending must be enough
+  }
+  Ros r;
+  EXPECT(r.up("local"), "init");
+  char c;
+  EXPECT(read(ready[0], &c, 1) == 1, "the other process is ready");
+  size_t n = 0;
+  EXPECT(rmw_count_publishers(r.node, topic.c_str(), &n) == RMW_RET_OK && n == 1, "1 publisher, got %zu", n);
+  rcutils_string_array_t names = rcutils_get_zero_initialized_string_array();
+  rcutils_string_array_t nss = rcutils_get_zero_initialized_string_array();
+  EXPECT(rmw_get_node_names(r.node, &names, &nss) == RMW_RET_OK, "node names");
+  bool found = false;
+  for (size_t i = 0; i < names.size; i++) found |= std::string(names.data[i]) == "remote_" + leaf;
+  std::printf("  %zu nodes listed, the other process's among them: %s\n", names.size, found ? "yes" : "no");
+  EXPECT(found, "the other node listed");
+  rmw_names_and_types_t nt = rmw_get_zero_initialized_names_and_types();
+  rcutils_allocator_t a = rcutils_get_default_allocator();
+  EXPECT(rmw_get_topic_names_and_types(r.node, &a, false, &nt) == RMW_RET_OK, "topic names");
+  bool typed = false;
+  for (size_t i = 0; i < nt.names.size; i++)
+    typed |= std::string(nt.names.data[i]) == topic && nt.types[i].size == 1 &&
+             std::string(nt.types[i].data[0]) == "example_interfaces/msg/String";
+  EXPECT(typed, "the topic with its type");
+  if (exists("/dev/ros2/nodes")) EXPECT(exists("/dev/ros2/nodes/remote_" + leaf), "listed in /dev/ros2/nodes");
+  if (write(done[1], &c, 1) != 1) return false;
+  int status = 0;
+  waitpid(child, &status, 0);
+  EXPECT(WIFEXITED(status) && WEXITSTATUS(status) == 0, "the other process ended cleanly");
+  n = 1;
+  EXPECT(rmw_count_publishers(r.node, topic.c_str(), &n) == RMW_RET_OK && n == 0, "0 publishers after it ended, got %zu", n);
+  if (exists("/dev/ros2/nodes")) EXPECT(!exists("/dev/ros2/nodes/remote_" + leaf), "gone from /dev/ros2/nodes");
+  return true;
+}
+
 // Observation, run only when named: the priority a thread has after it receives a pulse at 20 and then one at 10,
 // and after it receives a message from a sender at 20 and then one from a sender at 10.
 bool observe_priority_after_receive() {
@@ -313,6 +367,7 @@ const std::vector<std::pair<const char *, std::function<bool()>>> kChecks = {
     {"a_destroyed_topic_is_gone_and_its_name_takes_another_type",
      a_destroyed_topic_is_gone_and_its_name_takes_another_type},
     {"endpoints_coming_and_going_on_one_topic_never_split_it", endpoints_coming_and_going_on_one_topic_never_split_it},
+    {"graph_queries_see_another_process_and_its_end", graph_queries_see_another_process_and_its_end},
 };
 
 }  // namespace

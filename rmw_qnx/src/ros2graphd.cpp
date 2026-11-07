@@ -7,6 +7,7 @@
 //
 //   /dev/ros2/topics/<name>       one file per topic; cat prints its type, endpoint counts and latest message
 //   /dev/ros2/services/<name>     one file per service; cat prints its type and server
+//   /dev/ros2/nodes/<name>        one file per node (namespace and name); cat prints its endpoints
 //
 // Every open renders a fresh snapshot from the topics' shared-memory objects (/dev/shmem/rmwqnx.d<domain>.*) and
 // the service registry, so ls and cat always show the present. A topic's latest message is decoded with the type's
@@ -15,6 +16,7 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <sys/dispatch.h>
@@ -28,10 +30,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
 #include "cdr.hpp"
+#include "graph.hpp"
 #include "names.hpp"
 #include "ring.hpp"
 #include "rosidl_runtime_c/message_type_support_struct.h"
@@ -265,9 +269,58 @@ std::string render_service(const std::string &ros_name) {
   return out;
 }
 
+// ---- nodes, from the graph files every rmw_qnx context writes (core/graph.hpp) ----
+
+std::vector<rmw_qnx::core::GraphPart> graph_parts() {
+  std::vector<rmw_qnx::core::GraphPart> out;
+  const std::string dir = "/tmp/rmwqnx/d" + std::to_string(g_domain) + "/graph";
+  DIR *d = opendir(dir.c_str());
+  if (!d) return out;
+  while (dirent *e = readdir(d)) {
+    const std::string n = e->d_name;
+    if (n.empty() || n[0] == '.' || n.find(".tmp") != std::string::npos) continue;
+    std::ifstream f(dir + "/" + n);
+    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    rmw_qnx::core::GraphPart p;
+    if (rmw_qnx::core::read_part(text, &p) && kill(pid_t(p.pid), 0) == 0) out.push_back(std::move(p));
+  }
+  closedir(d);
+  return out;
+}
+
+std::string node_full_name(const rmw_qnx::core::NodeEntry &n) {
+  return n.ns == "/" ? "/" + n.name : n.ns + "/" + n.name;
+}
+
+std::vector<std::string> node_names() {
+  std::vector<std::string> out;
+  for (const auto &p : graph_parts())
+    for (const auto &n : p.nodes) out.push_back(node_full_name(n));
+  std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
+  return out;
+}
+
+std::string render_node(const std::string &full) {
+  std::string out;
+  for (const auto &p : graph_parts())
+    for (const auto &n : p.nodes) {
+      if (node_full_name(n) != full) continue;
+      printf_to(out, "node:         %s\n", full.c_str());
+      printf_to(out, "process:      pid %lld\n", (long long)p.pid);
+      const char *kinds[] = {"publisher", "subscription", "service", "client"};
+      for (const auto &e : p.endpoints)
+        if (e.node_name == n.name && e.node_namespace == n.ns)
+          printf_to(out, "%-13s %s [%s]\n", (std::string(kinds[int(e.kind)]) + ":").c_str(), e.name.c_str(),
+                    e.type.c_str());
+      return out;
+    }
+  return "node " + full + " is gone\n";
+}
+
 // ---- the resource manager ----
 
-const char *const kRootEntries[] = {"topics", "services"};
+const char *const kRootEntries[] = {"nodes", "topics", "services"};
 
 void set_entries(Ocb *o, const std::vector<std::string> &names) {
   o->n_entries = names.size();
@@ -284,19 +337,21 @@ int io_open(resmgr_context_t *ctp, io_open_t *msg, RESMGR_HANDLE_T *handle, void
   if (path.empty()) {
     dir = true;
     entries.assign(std::begin(kRootEntries), std::end(kRootEntries));
-  } else if (path == "topics" || path == "services") {
+  } else if (path == "topics" || path == "services" || path == "nodes") {
     dir = true;
-    for (const std::string &n : path == "topics" ? topic_names() : service_names()) entries.push_back(entry_of(n));
+    for (const std::string &n : path == "topics" ? topic_names() : path == "nodes" ? node_names() : service_names())
+      entries.push_back(entry_of(n));
   } else {
     const size_t slash = path.find('/');
     if (slash == std::string::npos) return ENOENT;
     const std::string kind = path.substr(0, slash), entry = path.substr(slash + 1);
     auto decoded = rmw_qnx::core::decode_name(entry);
-    if (!decoded || (kind != "topics" && kind != "services")) return ENOENT;
+    if (!decoded || (kind != "topics" && kind != "services" && kind != "nodes")) return ENOENT;
     const std::string ros_name = "/" + *decoded;
-    const std::vector<std::string> names = kind == "topics" ? topic_names() : service_names();
+    const std::vector<std::string> names =
+        kind == "topics" ? topic_names() : kind == "nodes" ? node_names() : service_names();
     if (std::find(names.begin(), names.end(), ros_name) == names.end()) return ENOENT;
-    data = kind == "topics" ? render_topic(ros_name) : render_service(ros_name);
+    data = kind == "topics" ? render_topic(ros_name) : kind == "nodes" ? render_node(ros_name) : render_service(ros_name);
   }
   // ioflag carries _IO_FLAG_RD/_IO_FLAG_WR (the open mode plus one): everything here is read-only.
   if (!dir && (msg->connect.ioflag & _IO_FLAG_WR)) return EROFS;
