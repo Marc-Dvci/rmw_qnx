@@ -1,0 +1,321 @@
+# test_rmw_implementation (ROS 2 Jazzy), QEMU, WHPX; 2026-11-07T05:46:23Z
+## rmw_qnx test_client
+[==========] Running 14 tests from 2 test suites.
+[  FAILED  ] TestClient.check_qos (0 ms)
+[==========] 14 tests from 2 test suites ran. (6 ms total)
+[  PASSED  ] 13 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] TestClient.check_qos
+exit=0
+## rmw_qnx test_create_destroy_node
+[==========] Running 6 tests from 2 test suites.
+[==========] 6 tests from 2 test suites ran. (2 ms total)
+[  PASSED  ] 6 tests.
+exit=0
+## rmw_qnx test_duration_infinite
+[==========] Running 1 test from 1 test suite.
+[  FAILED  ] TestDurationInfinite.create_publisher (1009 ms)
+[==========] 1 test from 1 test suite ran. (1009 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] TestDurationInfinite.create_publisher
+exit=0
+## rmw_qnx test_event
+[==========] Running 4 tests from 1 test suite.
+[  FAILED  ] TestEvent.basic_publisher_matched_event (2406 ms)
+[  FAILED  ] TestEvent.basic_subscription_matched_event (2405 ms)
+[  FAILED  ] TestEvent.one_pub_multi_sub_connect_disconnect (2102 ms)
+[  FAILED  ] TestEvent.one_sub_multi_pub_matched_unmatched_event (2102 ms)
+[==========] 4 tests from 1 test suite ran. (9018 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 4 tests, listed below:
+[  FAILED  ] TestEvent.basic_publisher_matched_event
+[  FAILED  ] TestEvent.basic_subscription_matched_event
+[  FAILED  ] TestEvent.one_pub_multi_sub_connect_disconnect
+[  FAILED  ] TestEvent.one_sub_multi_pub_matched_unmatched_event
+exit=0
+## rmw_qnx test_graph_api
+[==========] Running 15 tests from 1 test suite.
+[  FAILED  ] TestGraphAPI.get_node_names_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_node_names_with_enclaves_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_topic_names_and_types_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_service_names_and_types_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_subscriber_names_and_types_by_node_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_publisher_names_and_types_by_node_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_service_names_and_types_by_node_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_client_names_and_types_by_node_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_publishers_info_by_topic_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.get_subscriptions_info_by_topic_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.count_publishers_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.count_subscribers_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.count_clients_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.count_services_with_bad_arguments (0 ms)
+[  FAILED  ] TestGraphAPI.count_clients_and_services (0 ms)
+[==========] 15 tests from 1 test suite ran. (6 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 15 tests, listed below:
+[  FAILED  ] TestGraphAPI.get_node_names_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_node_names_with_enclaves_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_topic_names_and_types_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_service_names_and_types_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_subscriber_names_and_types_by_node_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_publisher_names_and_types_by_node_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_service_names_and_types_by_node_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_client_names_and_types_by_node_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_publishers_info_by_topic_with_bad_arguments
+[  FAILED  ] TestGraphAPI.get_subscriptions_info_by_topic_with_bad_arguments
+[  FAILED  ] TestGraphAPI.count_publishers_with_bad_arguments
+[  FAILED  ] TestGraphAPI.count_subscribers_with_bad_arguments
+[  FAILED  ] TestGraphAPI.count_clients_with_bad_arguments
+[  FAILED  ] TestGraphAPI.count_services_with_bad_arguments
+[  FAILED  ] TestGraphAPI.count_clients_and_services
+exit=0
+## rmw_qnx test_init_options
+[==========] Running 4 tests from 1 test suite.
+[==========] 4 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 4 tests.
+exit=0
+## rmw_qnx test_init_shutdown
+[==========] Running 7 tests from 1 test suite.
+[==========] 7 tests from 1 test suite ran. (3 ms total)
+[  PASSED  ] 7 tests.
+exit=0
+## rmw_qnx test_publisher
+[==========] Running 18 tests from 3 test suites.
+[  FAILED  ] TestPublisherUse.count_matched_subscriptions (1010 ms)
+[  FAILED  ] TestPublisherUse.publish_serialized_with_internal_errors (0 ms)
+[  FAILED  ] TestPublisherUse.wait_for_all_acked_with_best_effort (0 ms)
+[==========] 18 tests from 3 test suites ran. (2025 ms total)
+[  PASSED  ] 14 tests.
+[  FAILED  ] 3 tests, listed below:
+[  FAILED  ] TestPublisherUse.count_matched_subscriptions
+[  FAILED  ] TestPublisherUse.publish_serialized_with_internal_errors
+[  FAILED  ] TestPublisherUse.wait_for_all_acked_with_best_effort
+exit=0
+## rmw_qnx test_publisher_allocator
+[==========] Running 1 test from 1 test suite.
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+exit=0
+## rmw_qnx test_qos_profile_check_compatible
+[==========] Running 2 tests from 1 test suite.
+[==========] 2 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 2 tests.
+exit=0
+## rmw_qnx test_serialize_deserialize
+[==========] Running 7 tests from 1 test suite.
+[  FAILED  ] TestSerializeDeserialize.clean_round_trip_for_c_message (0 ms)
+Memory fault (core dumped) 
+exit=0
+## rmw_qnx test_service
+[==========] Running 13 tests from 2 test suites.
+[  FAILED  ] TestService.send_reponse_with_bad_arguments (0 ms)
+[  FAILED  ] TestService.send_reponse_with_client_gone (0 ms)
+[  FAILED  ] TestService.check_qos (0 ms)
+[==========] 13 tests from 2 test suites ran. (8 ms total)
+[  PASSED  ] 10 tests.
+[  FAILED  ] 3 tests, listed below:
+[  FAILED  ] TestService.send_reponse_with_bad_arguments
+[  FAILED  ] TestService.send_reponse_with_client_gone
+[  FAILED  ] TestService.check_qos
+exit=0
+## rmw_qnx test_subscription
+[==========] Running 30 tests from 4 test suites.
+[  FAILED  ] TestSubscriptionUse.count_matched_subscriptions (1010 ms)
+[  FAILED  ] TestSubscriptionUse.count_mismatched_subscriptions (1009 ms)
+[  FAILED  ] TestSubscriptionUse.ignore_local_publications (2011 ms)
+[  FAILED  ] TestSubscriptionUse.take_sequence (0 ms)
+[  FAILED  ] TestSubscriptionUse.take_sequence_with_bad_args (0 ms)
+[  FAILED  ] TestSubscriptionUse.no_content_filter_set (2010 ms)
+[  FAILED  ] TestContentFilterSubscriptionUse.content_filter_get_begin (2011 ms)
+[  FAILED  ] TestContentFilterSubscriptionUse.content_filter_get_later (2011 ms)
+[  FAILED  ] TestContentFilterSubscriptionUse.content_filter_reset (2010 ms)
+[==========] 30 tests from 4 test suites ran. (12084 ms total)
+[  PASSED  ] 18 tests.
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] TestSubscriptionUse.count_matched_subscriptions
+[  FAILED  ] TestSubscriptionUse.count_mismatched_subscriptions
+[  FAILED  ] TestSubscriptionUse.ignore_local_publications
+[  FAILED  ] TestSubscriptionUse.take_sequence
+[  FAILED  ] TestSubscriptionUse.take_sequence_with_bad_args
+[  FAILED  ] TestSubscriptionUse.no_content_filter_set
+[  FAILED  ] TestContentFilterSubscriptionUse.content_filter_get_begin
+[  FAILED  ] TestContentFilterSubscriptionUse.content_filter_get_later
+[  FAILED  ] TestContentFilterSubscriptionUse.content_filter_reset
+exit=0
+## rmw_qnx test_subscription_allocator
+[==========] Running 1 test from 1 test suite.
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+exit=0
+## rmw_qnx test_unique_identifiers
+[==========] Running 6 tests from 3 test suites.
+[==========] 6 tests from 3 test suites ran. (3 ms total)
+[  PASSED  ] 6 tests.
+exit=0
+## rmw_qnx test_wait_set
+[==========] Running 3 tests from 2 test suites.
+[==========] 3 tests from 2 test suites ran. (708 ms total)
+[  PASSED  ] 3 tests.
+exit=0
+## rmw_cyclonedds_cpp test_client
+[==========] Running 14 tests from 2 test suites.
+[==========] 14 tests from 2 test suites ran. (142 ms total)
+[  PASSED  ] 14 tests.
+exit=0
+## rmw_cyclonedds_cpp test_create_destroy_node
+[==========] Running 6 tests from 2 test suites.
+Memory fault (core dumped) 
+exit=0
+## rmw_cyclonedds_cpp test_duration_infinite
+[==========] Running 1 test from 1 test suite.
+[==========] 1 test from 1 test suite ran. (12 ms total)
+[  PASSED  ] 1 test.
+exit=0
+## rmw_cyclonedds_cpp test_event
+[==========] Running 4 tests from 1 test suite.
+[==========] 4 tests from 1 test suite ran. (1048 ms total)
+[  PASSED  ] 4 tests.
+exit=0
+## rmw_cyclonedds_cpp test_graph_api
+[==========] Running 15 tests from 1 test suite.
+[==========] 15 tests from 1 test suite ran. (144 ms total)
+[  PASSED  ] 15 tests.
+exit=0
+## rmw_cyclonedds_cpp test_init_options
+[==========] Running 4 tests from 1 test suite.
+[==========] 4 tests from 1 test suite ran. (3 ms total)
+[  PASSED  ] 4 tests.
+exit=0
+## rmw_cyclonedds_cpp test_init_shutdown
+[==========] Running 7 tests from 1 test suite.
+[==========] 7 tests from 1 test suite ran. (3 ms total)
+[  PASSED  ] 7 tests.
+exit=0
+## rmw_cyclonedds_cpp test_publisher
+[==========] Running 18 tests from 3 test suites.
+[==========] 18 tests from 3 test suites ran. (1181 ms total)
+[  PASSED  ] 17 tests.
+exit=0
+## rmw_cyclonedds_cpp test_publisher_allocator
+[==========] Running 1 test from 1 test suite.
+[==========] 1 test from 1 test suite ran. (6 ms total)
+[  PASSED  ] 1 test.
+exit=0
+## rmw_cyclonedds_cpp test_qos_profile_check_compatible
+[==========] Running 2 tests from 1 test suite.
+[==========] 2 tests from 1 test suite ran. (4 ms total)
+[  PASSED  ] 2 tests.
+exit=0
+## rmw_cyclonedds_cpp test_serialize_deserialize
+[==========] Running 7 tests from 1 test suite.
+[==========] 7 tests from 1 test suite ran. (4 ms total)
+[  PASSED  ] 7 tests.
+exit=0
+## rmw_cyclonedds_cpp test_service
+[==========] Running 13 tests from 2 test suites.
+[==========] 13 tests from 2 test suites ran. (132 ms total)
+[  PASSED  ] 13 tests.
+exit=0
+## rmw_cyclonedds_cpp test_subscription
+[==========] Running 30 tests from 4 test suites.
+[==========] 30 tests from 4 test suites ran. (2313 ms total)
+[  PASSED  ] 27 tests.
+exit=0
+## rmw_cyclonedds_cpp test_subscription_allocator
+[==========] Running 1 test from 1 test suite.
+[==========] 1 test from 1 test suite ran. (3 ms total)
+[  PASSED  ] 1 test.
+exit=0
+## rmw_cyclonedds_cpp test_unique_identifiers
+[==========] Running 6 tests from 3 test suites.
+[==========] 6 tests from 3 test suites ran. (59 ms total)
+[  PASSED  ] 6 tests.
+exit=0
+## rmw_cyclonedds_cpp test_wait_set
+[==========] Running 3 tests from 2 test suites.
+[==========] 3 tests from 2 test suites ran. (720 ms total)
+[  PASSED  ] 3 tests.
+exit=0
+## rmw_fastrtps_cpp test_client
+[==========] Running 14 tests from 2 test suites.
+[==========] 14 tests from 2 test suites ran. (181 ms total)
+[  PASSED  ] 14 tests.
+exit=0
+## rmw_fastrtps_cpp test_create_destroy_node
+[==========] Running 6 tests from 2 test suites.
+Memory fault (core dumped) 
+exit=0
+## rmw_fastrtps_cpp test_duration_infinite
+[==========] Running 1 test from 1 test suite.
+[==========] 1 test from 1 test suite ran. (36 ms total)
+[  PASSED  ] 1 test.
+exit=0
+## rmw_fastrtps_cpp test_event
+[==========] Running 4 tests from 1 test suite.
+[==========] 4 tests from 1 test suite ran. (1064 ms total)
+[  PASSED  ] 4 tests.
+exit=0
+## rmw_fastrtps_cpp test_graph_api
+[==========] Running 15 tests from 1 test suite.
+[==========] 15 tests from 1 test suite ran. (123 ms total)
+[  PASSED  ] 15 tests.
+exit=0
+## rmw_fastrtps_cpp test_init_options
+[==========] Running 4 tests from 1 test suite.
+[==========] 4 tests from 1 test suite ran. (10 ms total)
+[  PASSED  ] 4 tests.
+exit=0
+## rmw_fastrtps_cpp test_init_shutdown
+[==========] Running 7 tests from 1 test suite.
+[==========] 7 tests from 1 test suite ran. (12 ms total)
+[  PASSED  ] 7 tests.
+exit=0
+## rmw_fastrtps_cpp test_publisher
+[==========] Running 18 tests from 3 test suites.
+[==========] 18 tests from 3 test suites ran. (1157 ms total)
+[  PASSED  ] 18 tests.
+exit=0
+## rmw_fastrtps_cpp test_publisher_allocator
+[==========] Running 1 test from 1 test suite.
+[==========] 1 test from 1 test suite ran. (10 ms total)
+[  PASSED  ] 1 test.
+exit=0
+## rmw_fastrtps_cpp test_qos_profile_check_compatible
+[==========] Running 2 tests from 1 test suite.
+[==========] 2 tests from 1 test suite ran. (52 ms total)
+[  PASSED  ] 2 tests.
+exit=0
+## rmw_fastrtps_cpp test_serialize_deserialize
+[==========] Running 7 tests from 1 test suite.
+[==========] 7 tests from 1 test suite ran. (13 ms total)
+[  PASSED  ] 7 tests.
+exit=0
+## rmw_fastrtps_cpp test_service
+[==========] Running 13 tests from 2 test suites.
+[==========] 13 tests from 2 test suites ran. (119 ms total)
+[  PASSED  ] 13 tests.
+exit=0
+## rmw_fastrtps_cpp test_subscription
+[==========] Running 30 tests from 4 test suites.
+[==========] 30 tests from 4 test suites ran. (9268 ms total)
+[  PASSED  ] 30 tests.
+exit=0
+## rmw_fastrtps_cpp test_subscription_allocator
+[==========] Running 1 test from 1 test suite.
+[==========] 1 test from 1 test suite ran. (11 ms total)
+[  PASSED  ] 1 test.
+exit=0
+## rmw_fastrtps_cpp test_unique_identifiers
+[==========] Running 6 tests from 3 test suites.
+[==========] 6 tests from 3 test suites ran. (61 ms total)
+[  PASSED  ] 6 tests.
+exit=0
+## rmw_fastrtps_cpp test_wait_set
+[==========] Running 3 tests from 2 test suites.
+[==========] 3 tests from 2 test suites ran. (732 ms total)
+[  PASSED  ] 3 tests.
+exit=0
+rmw_qnx: 85 passed, 36 failed, of 125 tests run; executables that did not finish: test_serialize_deserialize
+rmw_cyclonedds_cpp: 122 passed, 0 failed, of 126 tests run; executables that did not finish: test_create_destroy_node
+rmw_fastrtps_cpp: 126 passed, 0 failed, of 126 tests run; executables that did not finish: test_create_destroy_node

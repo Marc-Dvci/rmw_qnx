@@ -1,0 +1,13 @@
+# chatter through ROS 2, QEMU, WHPX; 2026-11-07T05:47:27Z
+## rmw_qnx
+CHATTER published=20 subscribers_matched=0
+I heard: [hello 1]
+I heard: [hello 2]
+I heard: [hello 3]
+CHATTER received=20 last=[hello 20] publishers_matched=1
+## rmw_cyclonedds_cpp
+CHATTER published=20 subscribers_matched=0
+I heard: [hello 1]
+I heard: [hello 2]
+I heard: [hello 3]
+CHATTER received=20 last=[hello 20] publishers_matched=1
