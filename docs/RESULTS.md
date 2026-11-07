@@ -56,11 +56,53 @@ load finished first). There are more waits than requests because the client also
 (for io-sock, for instance). The three priority-10 events over MsgSend are the server starting up, before its first
 request.
 
-## 3. Through ROS 2
+## 3. Through ROS 2: the kill test
 
-Not measured yet. [`scripts/inversion_ros2.sh`](../scripts/inversion_ros2.sh) runs the same scenario as three ROS 2
-processes (a service server, a client and the load, [`bench/inversion_ros2`](../bench/inversion_ros2)) on Fast DDS,
-Cyclone DDS and rmw_qnx.
+**Command** (Git Bash on Windows, after `qnx/ros2/build.sh` and `qnx/ros2/build_ours.sh` in WSL):
+
+```
+bash scripts/inversion_ros2.sh up
+bash scripts/inversion_ros2.sh run 200 rmw_cyclonedds_cpp
+bash scripts/inversion_ros2.sh run 200 rmw_qnx
+bash scripts/inversion_ros2.sh down
+```
+
+**Setup** ([`bench/inversion_ros2/src/inversion.cpp`](../bench/inversion_ros2/src/inversion.cpp)): the scenario of
+section 1 as three ROS 2 processes, unchanged between middlewares. A client node at priority 20 calls
+`example_interfaces/srv/AddTwoInts` every 10 ms with a 5 ms deadline. A server node at priority 10 does 1 ms of
+work in its callback and returns its own current priority. A load process at priority 15 is busy 20 ms of every 50 ms.
+The measured threads (the client's calling thread, the server's executor thread, the load) are pinned to CPU 0; the
+middleware's own threads keep their process's priority and may use either CPU. The middleware is chosen with
+`RMW_IMPLEMENTATION` and nothing else. 200 requests per row, after 5 warm-up calls.
+
+**Result** ([`results/inversion-ros2-20261107-043659.txt`](../results/inversion-ros2-20261107-043659.txt) for Cyclone DDS,
+[`results/inversion-ros2-20261107-051340.txt`](../results/inversion-ros2-20261107-051340.txt) for rmw_qnx):
+
+| Middleware | Load | Deadline misses | Callback ran at client's priority (20) | Requests sent mid-burst | Of those, load finished first | p50 | Worst |
+|---|---|---|---|---|---|---|---|
+| Cyclone DDS | off | 0 | 0 | 0 | 0 | 1.90 ms | 2.37 ms |
+| rmw_qnx | off | 0 | 200 | 0 | 0 | 1.42 ms | 2.24 ms |
+| Cyclone DDS | on | **40** | 0 | 40 | **40** | 1.87 ms | 14.08 ms |
+| rmw_qnx | on | **1** | **200** | 80 | **0** | 2.13 ms | 5.98 ms |
+
+Over Cyclone DDS every request sent during a burst waited for the whole burst, because the server's callback ran at
+10. Over rmw_qnx the callback ran at the client's priority 20 for all 200 requests, and finished ahead of the load
+every time it was contended. One rmw_qnx request took 5.98 ms, over the 5 ms deadline; it was not one where the load
+ran first, and the run log does not say more about it. Run once each.
+
+Fast DDS is not in this comparison yet: it is not built (`RMWQNX_SKIP` in [`qnx/ros2/build.sh`](../qnx/ros2/build.sh)).
+
+### What it took to run ROS 2 on this guest
+
+- The ROS 2 cross-build with build-files' toolchain file links shared objects with `--as-needed` before qcc adds
+  `-lc`, so libc pieces from `libcS.a` were copied into, and exported from, many libraries. `qnx/ros2/build.sh` adds
+  `-Wl,--no-as-needed`.
+- QNX 8.0's x86_64 `memchr` crashes when the length is `SIZE_MAX` and the start pointer is not 8-byte aligned, which
+  `rcutils_strdup` does. [`qnx/ros2/patches/memchr_size_max.c`](../qnx/ros2/patches/memchr_size_max.c) shows it in
+  the guest (aligned start: ok; offsets 1 to 7: crashed);
+  [`qnx/ros2/patches/rcutils-strndup.patch`](../qnx/ros2/patches/rcutils-strndup.patch) uses `strnlen` instead.
+- With every middleware thread pinned to CPU 0, Cyclone DDS discovery never completed (a priority-20 thread kept the
+  CPU from the priority-10 server's discovery). Only the measured threads are pinned now.
 
 ## 4. Host tests of the core
 

@@ -39,7 +39,7 @@ run)
     mkdir -p "$REPO/results"
     OUT="$REPO/results/inversion-ros2-$(date +%Y%m%d-%H%M%S).txt"
     {
-        echo "# inversion through ROS 2, QEMU, WHPX, 2 vCPUs, all three processes pinned to CPU 0; $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "# inversion through ROS 2, QEMU, WHPX, 2 vCPUs, measured threads pinned to CPU 0; $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         for rmw in $RMWS; do
             for load in 0 1; do
                 G "$ENV; export RMW_IMPLEMENTATION=$rmw; rm -rf /tmp/rmwqnx; \$I init && (\$I server > /tmp/server.log 2>&1 </dev/null &) ; sleep 3; if [ $load = 1 ]; then (\$I load >/dev/null 2>&1 &) ; fi; \$I client $N | grep RESULT | sed 's/\$/ load=$load/'; slay -f inversion >/dev/null 2>&1; sleep 1; grep -v '^\$' /tmp/server.log | tail -3"
