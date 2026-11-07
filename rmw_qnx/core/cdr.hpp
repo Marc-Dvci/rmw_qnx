@@ -53,7 +53,7 @@ class CdrWriter {
 class CdrReader {
  public:
   CdrReader(const uint8_t *data, size_t len) : p_(data), len_(len) {
-    ok_ = len >= 4 && data[0] == 0x00 && data[1] == 0x01;
+    ok_ = data != nullptr && len >= 4 && data[0] == 0x00 && data[1] == 0x01;
     pos_ = 4;
   }
   bool ok() const { return ok_; }
@@ -81,10 +81,11 @@ class CdrReader {
     return true;
   }
   // Reads a sequence or string length and checks that at least `min_elem_size` bytes per element remain, so a
-  // forged length cannot make the caller allocate more than the buffer could hold.
+  // forged length cannot make the caller allocate more than the buffer could hold. A size of 0 is taken as 1.
   bool get_length(uint32_t *n, size_t min_elem_size) {
     if (!get(n)) return false;
-    if (min_elem_size && *n > (len_ - pos_) / min_elem_size) return ok_ = false;
+    if (min_elem_size == 0) min_elem_size = 1;
+    if (*n > (len_ - pos_) / min_elem_size) return ok_ = false;
     return true;
   }
   bool get_string(std::string *s) {

@@ -31,6 +31,7 @@ namespace rmw_qnx {
 
 constexpr uint32_t kTopicMagic = 0x54514d52;  // "RMQT"
 constexpr int kMaxSubs = 32;
+constexpr uint32_t kRemoved = 0x80000000u;
 constexpr uint32_t kSlotPayload = 16 * 1024;  // largest message, with its 24-byte prefix
 constexpr uint32_t kSlotCount = 64;
 constexpr size_t kPrefix = 24;                // publisher gid (16) + publication sequence (8)
@@ -46,7 +47,10 @@ struct SubEntry {
 
 struct TopicHeader {
   std::atomic<uint32_t> magic;
-  uint32_t reserved;
+  // Endpoints using the object (low 31 bits) and, in the top bit, "removed": the last endpoint to leave sets it in
+  // the same atomic step that takes the count to zero, then unlinks the object. An endpoint joins only an object
+  // without the bit, so none is ever left on an object being removed.
+  std::atomic<uint32_t> users;
   char type[192];
   std::atomic<uint32_t> pubs;
   uint32_t reserved2;
@@ -61,54 +65,18 @@ inline std::string shm_name(size_t domain, const std::string &topic) {
 
 class Topic {
  public:
-  // Opens or creates the topic. Empty error() means success.
-  Topic(size_t domain, const std::string &name, const std::string &type) {
-    const std::string n = shm_name(domain, name);
-    const size_t size = kRingOffset + core::Ring::bytes_needed(kSlotPayload, kSlotCount);
-    int fd = shm_open(n.c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
-    const bool creator = fd >= 0;
-    if (!creator) fd = shm_open(n.c_str(), O_RDWR, 0666);
-    if (fd < 0) {
-      err_ = "shm_open " + n + ": " + std::strerror(errno);
-      return;
+  // Opens or creates the topic, and counts this endpoint as one of its users. Empty error() means success.
+  Topic(size_t domain, const std::string &name, const std::string &type) : shm_(shm_name(domain, name)) {
+    // An object whose last user is removing it is skipped: open again until the name is free or recreated.
+    for (int attempt = 0; attempt < 1000; attempt++) {
+      if (open_once(name, type) != kRetry) return;
+      usleep(1000);
     }
-    if (creator && ftruncate(fd, off_t(size)) != 0) {
-      err_ = "ftruncate: " + std::string(std::strerror(errno));
-      close(fd);
-      return;
-    }
-    if (!creator) {  // the creator may still be sizing it
-      struct stat st {};
-      for (int i = 0; i < 1000 && (fstat(fd, &st) != 0 || size_t(st.st_size) < size); i++) usleep(1000);
-    }
-    void *p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    close(fd);
-    if (p == MAP_FAILED) {
-      err_ = "mmap: " + std::string(std::strerror(errno));
-      return;
-    }
-    mem_ = p;
-    size_ = size;
-    h_ = static_cast<TopicHeader *>(p);
-    if (creator) {
-      std::snprintf(h_->type, sizeof h_->type, "%s", type.c_str());
-      core::Ring::format(static_cast<char *>(p) + kRingOffset, kSlotPayload, kSlotCount);
-      h_->magic.store(kTopicMagic, std::memory_order_release);
-    } else {
-      for (int i = 0; i < 1000 && h_->magic.load(std::memory_order_acquire) != kTopicMagic; i++) usleep(1000);
-      if (h_->magic.load(std::memory_order_acquire) != kTopicMagic) {
-        err_ = "topic " + name + " was never initialised";
-        return;
-      }
-      if (type != h_->type) {
-        err_ = "topic " + name + " has type " + h_->type + ", not " + type;
-        return;
-      }
-    }
-    ring_ = core::Ring(static_cast<char *>(p) + kRingOffset);
+    err_ = "topic " + name + " stayed in removal";
   }
   ~Topic() {
     for (auto &kv : coids_) ConnectDetach(kv.second);
+    if (joined_) leave(h_, shm_);
     if (mem_) munmap(mem_, size_);
   }
   Topic(const Topic &) = delete;
@@ -183,6 +151,85 @@ class Topic {
   }
 
  private:
+  enum Outcome { kDone, kRetry };
+  Outcome open_once(const std::string &name, const std::string &type) {
+    const std::string &n = shm_;
+    const size_t size = kRingOffset + core::Ring::bytes_needed(kSlotPayload, kSlotCount);
+    int fd = shm_open(n.c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
+    const bool creator = fd >= 0;
+    if (!creator) fd = shm_open(n.c_str(), O_RDWR, 0666);
+    if (fd < 0) {
+      if (errno == ENOENT) return kRetry;  // removed between the two opens
+      err_ = "shm_open " + n + ": " + std::strerror(errno);
+      return kDone;
+    }
+    if (creator && ftruncate(fd, off_t(size)) != 0) {
+      err_ = "ftruncate: " + std::string(std::strerror(errno));
+      close(fd);
+      shm_unlink(n.c_str());
+      return kDone;
+    }
+    if (!creator) {  // the creator may still be sizing it
+      struct stat st {};
+      for (int i = 0; i < 1000 && (fstat(fd, &st) != 0 || size_t(st.st_size) < size); i++) usleep(1000);
+    }
+    void *p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (p == MAP_FAILED) {
+      err_ = "mmap: " + std::string(std::strerror(errno));
+      return kDone;
+    }
+    auto *h = static_cast<TopicHeader *>(p);
+    if (creator) {
+      std::snprintf(h->type, sizeof h->type, "%s", type.c_str());
+      core::Ring::format(static_cast<char *>(p) + kRingOffset, kSlotPayload, kSlotCount);
+      h->users.store(1, std::memory_order_relaxed);
+      h->magic.store(kTopicMagic, std::memory_order_release);
+    } else {
+      for (int i = 0; i < 1000 && h->magic.load(std::memory_order_acquire) != kTopicMagic; i++) usleep(1000);
+      if (h->magic.load(std::memory_order_acquire) != kTopicMagic) {
+        munmap(p, size);
+        err_ = "topic " + name + " was never initialised";
+        return kDone;
+      }
+      uint32_t u = h->users.load();
+      do {
+        if (u & kRemoved) {
+          munmap(p, size);
+          return kRetry;
+        }
+      } while (!h->users.compare_exchange_weak(u, u + 1));
+      if (type != h->type) {
+        // Leave again: this endpoint never uses the object. If it was the last user, the name is free now.
+        const std::string other = h_type_copy(h);
+        const bool was_last = leave(h, n);
+        munmap(p, size);
+        if (was_last) return kRetry;
+        err_ = "topic " + name + " has type " + other + ", not " + type;
+        return kDone;
+      }
+    }
+    mem_ = p;
+    size_ = size;
+    h_ = h;
+    joined_ = true;
+    ring_ = core::Ring(static_cast<char *>(p) + kRingOffset);
+    return kDone;
+  }
+  static std::string h_type_copy(const TopicHeader *h) { return std::string(h->type, strnlen(h->type, sizeof h->type)); }
+  // Takes one user off the object; the last one marks it removed and unlinks it. Returns true for the last.
+  static bool leave(TopicHeader *h, const std::string &shm) {
+    uint32_t u = h->users.load();
+    uint32_t next;
+    do {
+      next = (u & ~kRemoved) <= 1 ? kRemoved : u - 1;
+    } while (!h->users.compare_exchange_weak(u, next));
+    if (next == kRemoved) shm_unlink(shm.c_str());
+    return next == kRemoved;
+  }
+
+  std::string shm_;
+  bool joined_ = false;
   std::string err_;
   void *mem_ = nullptr;
   size_t size_ = 0;

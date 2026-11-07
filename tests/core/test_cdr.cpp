@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -146,6 +147,91 @@ TEST(CdrProperty, every_truncation_fails_cleanly) {
       std::vector<uint8_t> cut(b.begin(), b.begin() + static_cast<long>(len));
       Value y;
       ASSERT_FALSE(read(cut, cut.size(), &y)) << "length " << len << " of " << b.size();
+    }
+  }
+}
+
+TEST(Cdr, a_null_buffer_is_refused_whatever_length_it_claims) {
+  EXPECT_FALSE(CdrReader(nullptr, 8).ok());
+  EXPECT_FALSE(CdrReader(nullptr, 0).ok());
+  CdrReader r(nullptr, 8);
+  uint32_t n = 0;
+  EXPECT_FALSE(r.get(&n));
+  EXPECT_EQ(r.remaining(), 0u);
+}
+
+// The buffer of a nested sequence whose element size the caller cannot bound: 00 01 00 00 ff ff ff ff.
+TEST(Cdr, a_length_of_2_to_the_32_minus_1_is_refused_even_with_no_element_size_given) {
+  const uint8_t b[] = {0x00, 0x01, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff};
+  CdrReader r(b, sizeof b);
+  uint32_t n = 0;
+  EXPECT_FALSE(r.get_length(&n, 0));
+}
+
+// Property: over random hostile buffers and random sequences of reads, the reader never reports more than the
+// buffer holds. Every accepted length times its element size fits in what remained, every string fits, remaining()
+// only shrinks, and a reader that failed stays failed. The buffer is a heap block of exactly its length, so a
+// sanitizer build also catches any read past it.
+TEST(Cdr, no_sequence_of_reads_on_hostile_bytes_claims_more_than_the_buffer_holds) {
+  std::mt19937 rng(11);
+  for (int round = 0; round < 20000; round++) {
+    const size_t len = rng() % 64;
+    std::unique_ptr<uint8_t[]> buf(new uint8_t[len ? len : 1]);
+    for (size_t i = 0; i < len; i++) buf[i] = uint8_t(rng() % 4 == 0 ? 0xff : rng());
+    if (len >= 2 && rng() % 4 != 0) {
+      buf[0] = 0;
+      buf[1] = 1;
+    }
+    CdrReader r(buf.get(), len);
+    size_t before = r.remaining();
+    bool failed = !r.ok();
+    for (int op = 0; op < 12; op++) {
+      bool ok = false;
+      switch (rng() % 6) {
+        case 0: {
+          uint8_t v;
+          ok = r.get(&v);
+          break;
+        }
+        case 1: {
+          uint32_t v;
+          ok = r.get(&v);
+          break;
+        }
+        case 2: {
+          double v;
+          ok = r.get(&v);
+          break;
+        }
+        case 3: {
+          std::string s;
+          ok = r.get_string(&s);
+          if (ok) {
+            EXPECT_LT(s.size(), len);
+          }
+          break;
+        }
+        case 4: {
+          uint32_t n = 0;
+          const size_t elem = rng() % 9;  // 0 means "unknown"
+          ok = r.get_length(&n, elem);
+          if (ok) {
+            EXPECT_LE(uint64_t(n) * (elem ? elem : 1), r.remaining()) << "round " << round;
+          }
+          break;
+        }
+        default: {
+          uint8_t out[16];
+          ok = r.get_bytes(out, rng() % 17);
+          break;
+        }
+      }
+      if (failed) {
+        EXPECT_FALSE(ok) << "round " << round;
+      }
+      failed |= !ok;
+      EXPECT_LE(r.remaining(), before) << "round " << round;
+      before = r.remaining();
     }
   }
 }

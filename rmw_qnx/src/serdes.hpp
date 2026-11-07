@@ -98,6 +98,24 @@ inline bool serialize_cpp(const its::MessageMembers *mm, const void *msg, core::
   return true;
 }
 
+// The fewest bytes a value of this type takes in CDR, ignoring alignment: a lower bound used to refuse a sequence
+// length that the remaining bytes could not hold. Every generated message has at least one member, so it is at
+// least 1 for any message; 1 is also the floor returned, so a forged length is always bounded by the buffer.
+inline size_t min_wire_size(const its::MessageMembers *mm, int depth = 0) {
+  size_t total = 0;
+  for (uint32_t i = 0; i < mm->member_count_; i++) {
+    const its::MessageMember &m = mm->members_[i];
+    size_t one = prim_size(m.type_id_);
+    if (m.type_id_ == its::ROS_TYPE_STRING || m.type_id_ == its::ROS_TYPE_WSTRING) one = 4;
+    if (m.type_id_ == its::ROS_TYPE_MESSAGE)
+      one = depth < 16 ? min_wire_size(static_cast<const its::MessageMembers *>(m.members_->data), depth + 1) : 1;
+    if (!m.is_array_) total += one;
+    else if (m.array_size_ == 0 || m.is_upper_bound_) total += 4;  // a sequence may be empty: its length only
+    else total += one * m.array_size_;
+  }
+  return total ? total : 1;
+}
+
 inline bool deserialize_cpp(const its::MessageMembers *mm, void *msg, core::CdrReader &r) {
   auto *base = static_cast<uint8_t *>(msg);
   for (uint32_t i = 0; i < mm->member_count_; i++) {
@@ -120,7 +138,7 @@ inline bool deserialize_cpp(const its::MessageMembers *mm, void *msg, core::CdrR
     size_t n = m.array_size_;
     if (m.array_size_ == 0 || m.is_upper_bound_) {
       uint32_t len = 0;
-      const size_t min_elem = prim_size(m.type_id_) ? prim_size(m.type_id_) : (sub ? 0 : 4);
+      const size_t min_elem = prim_size(m.type_id_) ? prim_size(m.type_id_) : (sub ? min_wire_size(sub) : 4);
       if (!r.get_length(&len, min_elem)) return false;
       if (m.is_upper_bound_ && len > m.array_size_) return false;
       n = len;
