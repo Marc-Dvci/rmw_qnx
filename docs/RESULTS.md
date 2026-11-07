@@ -76,3 +76,10 @@ branches: 70.1% (185 out of 264)
 
 Coverage is of `rmw_qnx/core/` only (ring, CDR, names, graph, QoS), the code that compiles on the host. The QNX layer
 (`rmw_qnx/src/`) is not in this figure.
+
+**Do the tests fail when the core breaks?** `scripts/mutation_check.sh` applies nine deliberate faults to a scratch
+copy of the core, one at a time (torn-read detection removed, lost-message count zeroed, slot size check loosened,
+string NUL check removed, forged-length check removed, percent escaping broken, removal by owner ignoring the owner,
+the durability rule removed, every deadline period counted as a miss) and rebuilds the tests against each.
+Result: `mutants killed: 9 of 9`. The forged-length mutant is killed by the test process aborting on a huge
+allocation, which is the failure the check exists to prevent.
