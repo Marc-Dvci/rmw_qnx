@@ -6,6 +6,7 @@ ros2graphd: /dev/ros2 for ROS domain 0
 # RMW_IMPLEMENTATION=rmw_qnx inversion server &            (a service, /inversion)
 
 # ls /dev/ros2
+nodes
 services
 topics
 
@@ -15,35 +16,35 @@ parameter_events
 
 # ls -l /dev/ros2/topics
 total 2
--r--r--r--  1 root root 320 2026-11-07 05:23 chatter
--r--r--r--  1 root root 841 2026-11-07 05:23 parameter_events
+-r--r--r--  1 root root 318 2026-11-07 06:59 chatter
+-r--r--r--  1 root root 843 2026-11-07 06:59 parameter_events
 
 # cat /dev/ros2/topics/chatter
 topic:        /chatter
 type:         example_interfaces/msg/String
 publishers:   1
 subscribers:  1
-written:      108 messages since the topic was created
+written:      20 messages since the topic was created
 transport:    shared-memory ring, 64 slots of 16384 bytes, /rmwqnx.d0.%2Fchatter
-latest:       message 108 in the ring, number 21 from its publisher
-  data: hello 21
+latest:       message 20 in the ring, number 20 from its publisher
+  data: hello 20
 
 # sleep 2; grep -A1 latest /dev/ros2/topics/chatter
-latest:       message 118 in the ring, number 31 from its publisher
-  data: hello 31
+latest:       message 30 in the ring, number 30 from its publisher
+  data: hello 30
 
 # cat /dev/ros2/topics/parameter_events
 topic:        /parameter_events
 type:         rcl_interfaces/msg/ParameterEvent
 publishers:   2
 subscribers:  3
-written:      24 messages since the topic was created
+written:      12 messages since the topic was created
 transport:    shared-memory ring, 64 slots of 16384 bytes, /rmwqnx.d0.%2Fparameter_events
-latest:       message 24 in the ring, number 6 from its publisher
+latest:       message 12 in the ring, number 6 from its publisher
   stamp:
-    sec: 1794029035
-    nanosec: 118903808
-  node: /talker
+    sec: 1794034741
+    nanosec: 900781366
+  node: /listener
   new_parameters: (1 items)
     -
       name: qos_overrides./parameter_events.publisher.reliability
@@ -60,6 +61,47 @@ latest:       message 24 in the ring, number 6 from its publisher
         string_array_value: []
   changed_parameters: (0 items)
   deleted_parameters: (0 items)
+
+# ls /dev/ros2/nodes
+inversion_server
+listener
+talker
+
+# for n in $(ls /dev/ros2/nodes); do cat /dev/ros2/nodes/$n; echo; done
+node:         /inversion_server
+process:      pid 897049
+subscription: /parameter_events [rcl_interfaces/msg/ParameterEvent]
+service:      /inversion_server/get_type_description [type_description_interfaces/srv/GetTypeDescription]
+service:      /inversion [example_interfaces/srv/AddTwoInts]
+
+node:         /listener
+process:      pid 880664
+publisher:    /rosout [rcl_interfaces/msg/Log]
+service:      /listener/get_parameters [rcl_interfaces/srv/GetParameters]
+service:      /listener/get_parameter_types [rcl_interfaces/srv/GetParameterTypes]
+service:      /listener/set_parameters [rcl_interfaces/srv/SetParameters]
+service:      /listener/set_parameters_atomically [rcl_interfaces/srv/SetParametersAtomically]
+service:      /listener/describe_parameters [rcl_interfaces/srv/DescribeParameters]
+service:      /listener/list_parameters [rcl_interfaces/srv/ListParameters]
+publisher:    /parameter_events [rcl_interfaces/msg/ParameterEvent]
+subscription: /parameter_events [rcl_interfaces/msg/ParameterEvent]
+service:      /listener/get_type_description [type_description_interfaces/srv/GetTypeDescription]
+subscription: /chatter [example_interfaces/msg/String]
+
+node:         /talker
+process:      pid 880663
+publisher:    /rosout [rcl_interfaces/msg/Log]
+service:      /talker/get_parameters [rcl_interfaces/srv/GetParameters]
+service:      /talker/get_parameter_types [rcl_interfaces/srv/GetParameterTypes]
+service:      /talker/set_parameters [rcl_interfaces/srv/SetParameters]
+service:      /talker/set_parameters_atomically [rcl_interfaces/srv/SetParametersAtomically]
+service:      /talker/describe_parameters [rcl_interfaces/srv/DescribeParameters]
+service:      /talker/list_parameters [rcl_interfaces/srv/ListParameters]
+publisher:    /parameter_events [rcl_interfaces/msg/ParameterEvent]
+subscription: /parameter_events [rcl_interfaces/msg/ParameterEvent]
+service:      /talker/get_type_description [type_description_interfaces/srv/GetTypeDescription]
+publisher:    /chatter [example_interfaces/msg/String]
+
 
 # ls /dev/ros2/services
 inversion
@@ -81,6 +123,6 @@ talker%2Fset_parameters_atomically
 
 # cat /dev/ros2/services/inversion
 service:      /inversion
-server:       pid 1646617, channel 1, service 2
+server:       pid 897049, channel 1, service 2
 transport:    MsgSend/MsgReply: the server's thread runs at the calling client's priority
 

@@ -1,0 +1,37 @@
+# inversion through ROS 2, QEMU, WHPX, 2 vCPUs, measured threads pinned to CPU 0; 2026-11-07T07:04:44Z
+## repeat 1 rmw_fastrtps_cpp load=0
+RESULT rmw=rmw_fastrtps_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=810.7 max_us=1554.1 load=0
+## repeat 1 rmw_fastrtps_cpp load=1
+RESULT rmw=rmw_fastrtps_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=864.6 max_us=16969.5 load=1
+## repeat 1 rmw_cyclonedds_cpp load=0
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=825.6 max_us=1268.7 load=0
+## repeat 1 rmw_cyclonedds_cpp load=1
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=846.5 max_us=16733.6 load=1
+## repeat 1 rmw_qnx load=0
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=200 p50_us=837.2 max_us=1313.8 load=0
+## repeat 1 rmw_qnx load=1
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=80 server_ran_first=80 load_ran_first=0 served_at_client_prio=200 p50_us=865.2 max_us=4698.5 load=1
+## repeat 2 rmw_fastrtps_cpp load=0
+RESULT rmw=rmw_fastrtps_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=854.0 max_us=1102.9 load=0
+## repeat 2 rmw_fastrtps_cpp load=1
+RESULT rmw=rmw_fastrtps_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=884.4 max_us=17256.3 load=1
+## repeat 2 rmw_cyclonedds_cpp load=0
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=781.5 max_us=1457.6 load=0
+## repeat 2 rmw_cyclonedds_cpp load=1
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=773.6 max_us=17053.4 load=1
+## repeat 2 rmw_qnx load=0
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=1 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=200 p50_us=940.4 max_us=6263.3 load=0
+## repeat 2 rmw_qnx load=1
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=80 server_ran_first=80 load_ran_first=0 served_at_client_prio=200 p50_us=890.6 max_us=1303.7 load=1
+## repeat 3 rmw_fastrtps_cpp load=0
+RESULT rmw=rmw_fastrtps_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=806.6 max_us=1081.4 load=0
+## repeat 3 rmw_fastrtps_cpp load=1
+RESULT rmw=rmw_fastrtps_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=830.4 max_us=16782.9 load=1
+## repeat 3 rmw_cyclonedds_cpp load=0
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=0 p50_us=852.1 max_us=1363.1 load=0
+## repeat 3 rmw_cyclonedds_cpp load=1
+RESULT rmw=rmw_cyclonedds_cpp requests=200 deadline_us=5000 misses=40 lost=0 contended=40 server_ran_first=0 load_ran_first=40 served_at_client_prio=0 p50_us=840.0 max_us=19977.2 load=1
+## repeat 3 rmw_qnx load=0
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=0 server_ran_first=0 load_ran_first=0 served_at_client_prio=200 p50_us=953.8 max_us=1351.9 load=0
+## repeat 3 rmw_qnx load=1
+RESULT rmw=rmw_qnx requests=200 deadline_us=5000 misses=0 lost=0 contended=80 server_ran_first=80 load_ran_first=0 served_at_client_prio=200 p50_us=767.9 max_us=1247.5 load=1

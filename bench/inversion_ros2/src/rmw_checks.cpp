@@ -323,6 +323,115 @@ bool graph_queries_see_another_process_and_its_end() {
   return true;
 }
 
+// Waits up to `ms` on one event; true if the wait set reports it ready.
+bool wait_event(rmw_wait_set_t *ws, rmw_event_t *ev, int ms) {
+  void *one[1] = {ev};
+  rmw_events_t evs{1, one};
+  rmw_time_t t{time_t(ms / 1000), long(ms % 1000) * 1000000};
+  (void)rmw_wait(nullptr, nullptr, nullptr, nullptr, &evs, ws, &t);
+  return one[0] != nullptr;
+}
+
+int64_t ms_since(const timespec &t0) {
+  timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000;
+}
+
+// A publisher with a 100 ms deadline publishes once and goes quiet for 450 ms: the event wakes a waiting thread by
+// a timer pulse (no polling thread) and the total reaches exactly 4, one per elapsed period. A healthy publisher
+// (200 ms deadline, a message every 20 ms for 1.5 s) raises none.
+bool a_quiet_publisher_raises_exactly_its_deadline_events_and_a_healthy_one_none() {
+  const auto *str = rosidl_typesupport_cpp::get_message_type_support_handle<example_interfaces::msg::String>();
+  Ros r;
+  EXPECT(r.up("deadline"), "init");
+  rmw_publisher_options_t po = rmw_get_default_publisher_options();
+  rmw_wait_set_t *ws = rmw_create_wait_set(&r.ctx, 1);
+  EXPECT(ws, "wait set");
+  EXPECT(rmw_event_type_is_supported(RMW_EVENT_OFFERED_DEADLINE_MISSED), "deadline events supported");
+
+  rmw_qos_profile_t q = qos();
+  q.deadline = rmw_time_t{0, 200 * 1000000};
+  const std::string healthy_name = "/rmwqnx_check_healthy_" + std::to_string(getpid());
+  rmw_publisher_t *healthy = rmw_create_publisher(r.node, str, healthy_name.c_str(), &q, &po);
+  EXPECT(healthy, "healthy publisher");
+  rmw_event_t hev = rmw_get_zero_initialized_event();
+  EXPECT(rmw_publisher_event_init(&hev, healthy, RMW_EVENT_OFFERED_DEADLINE_MISSED) == RMW_RET_OK, "event init");
+  example_interfaces::msg::String m;
+  m.data = "x";
+  timespec t0;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  int taken_count = 0;
+  while (ms_since(t0) < 1500) {
+    EXPECT(rmw_publish(healthy, &m, nullptr) == RMW_RET_OK, "publish");
+    usleep(20000);
+    rmw_offered_deadline_missed_status_t st{};
+    bool taken = false;
+    EXPECT(rmw_take_event(&hev, &st, &taken) == RMW_RET_OK, "take");
+    taken_count += taken;
+  }
+  std::printf("  healthy publisher, deadline 200 ms, a message every 20 ms for 1.5 s: %d events\n", taken_count);
+  EXPECT(taken_count == 0, "no event from a healthy publisher");
+
+  q.deadline = rmw_time_t{0, 100 * 1000000};
+  const std::string quiet_name = "/rmwqnx_check_quiet_" + std::to_string(getpid());
+  rmw_publisher_t *quiet = rmw_create_publisher(r.node, str, quiet_name.c_str(), &q, &po);
+  EXPECT(quiet, "quiet publisher");
+  rmw_event_t qev = rmw_get_zero_initialized_event();
+  EXPECT(rmw_publisher_event_init(&qev, quiet, RMW_EVENT_OFFERED_DEADLINE_MISSED) == RMW_RET_OK, "event init");
+  EXPECT(rmw_publish(quiet, &m, nullptr) == RMW_RET_OK, "publish once");
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  EXPECT(wait_event(ws, &qev, 2000), "the wait set woke for the event");
+  const int64_t woke_ms = ms_since(t0);
+  rmw_offered_deadline_missed_status_t st{};
+  bool taken = false;
+  EXPECT(rmw_take_event(&qev, &st, &taken) == RMW_RET_OK && taken, "first event taken");
+  std::printf("  quiet publisher: woke %lld ms after its last message; first status total %d, change %d\n",
+              (long long)woke_ms, st.total_count, st.total_count_change);
+  EXPECT(st.total_count == st.total_count_change && st.total_count >= 1, "first status counts only the new events");
+  while (ms_since(t0) < 450) usleep(5000);
+  EXPECT(rmw_take_event(&qev, &st, &taken) == RMW_RET_OK, "take");
+  const int total = taken ? st.total_count : 1;
+  std::printf("  after 450 ms of silence: total %d\n", total);
+  EXPECT(total == 4, "4 elapsed periods in 450 ms, got %d", total);
+  return true;
+}
+
+// A publisher's matched event reports a subscription joining and leaving, woken through the graph pulse.
+bool a_matched_event_reports_a_subscription_joining_and_leaving() {
+  const auto *str = rosidl_typesupport_cpp::get_message_type_support_handle<example_interfaces::msg::String>();
+  Ros r;
+  EXPECT(r.up("matched"), "init");
+  const std::string name = "/rmwqnx_check_matched_" + std::to_string(getpid());
+  rmw_qos_profile_t q = qos();
+  rmw_publisher_options_t po = rmw_get_default_publisher_options();
+  rmw_subscription_options_t so = rmw_get_default_subscription_options();
+  rmw_publisher_t *p = rmw_create_publisher(r.node, str, name.c_str(), &q, &po);
+  EXPECT(p, "publisher");
+  rmw_event_t ev = rmw_get_zero_initialized_event();
+  EXPECT(rmw_publisher_event_init(&ev, p, RMW_EVENT_PUBLICATION_MATCHED) == RMW_RET_OK, "event init");
+  rmw_wait_set_t *ws = rmw_create_wait_set(&r.ctx, 1);
+  EXPECT(!wait_event(ws, &ev, 100), "nothing yet");
+  rmw_subscription_t *s = rmw_create_subscription(r.node, str, name.c_str(), &q, &so);
+  EXPECT(s, "subscription");
+  EXPECT(wait_event(ws, &ev, 2000), "woken by the join");
+  rmw_matched_status_t st{};
+  bool taken = false;
+  EXPECT(rmw_take_event(&ev, &st, &taken) == RMW_RET_OK && taken, "join taken");
+  std::printf("  join: total %zu (%+d), current %zu (%+d)\n", st.total_count, st.total_count_change, st.current_count,
+              st.current_count_change);
+  EXPECT(st.total_count == 1 && st.total_count_change == 1 && st.current_count == 1 && st.current_count_change == 1,
+         "one join");
+  EXPECT(rmw_destroy_subscription(r.node, s) == RMW_RET_OK, "destroy");
+  EXPECT(wait_event(ws, &ev, 2000), "woken by the leave");
+  EXPECT(rmw_take_event(&ev, &st, &taken) == RMW_RET_OK && taken, "leave taken");
+  std::printf("  leave: total %zu (%+d), current %zu (%+d)\n", st.total_count, st.total_count_change, st.current_count,
+              st.current_count_change);
+  EXPECT(st.total_count == 1 && st.total_count_change == 0 && st.current_count == 0 && st.current_count_change == -1,
+         "one leave");
+  return true;
+}
+
 // Observation, run only when named: the priority a thread has after it receives a pulse at 20 and then one at 10,
 // and after it receives a message from a sender at 20 and then one from a sender at 10.
 bool observe_priority_after_receive() {
@@ -368,6 +477,10 @@ const std::vector<std::pair<const char *, std::function<bool()>>> kChecks = {
      a_destroyed_topic_is_gone_and_its_name_takes_another_type},
     {"endpoints_coming_and_going_on_one_topic_never_split_it", endpoints_coming_and_going_on_one_topic_never_split_it},
     {"graph_queries_see_another_process_and_its_end", graph_queries_see_another_process_and_its_end},
+    {"a_quiet_publisher_raises_exactly_its_deadline_events_and_a_healthy_one_none",
+     a_quiet_publisher_raises_exactly_its_deadline_events_and_a_healthy_one_none},
+    {"a_matched_event_reports_a_subscription_joining_and_leaving",
+     a_matched_event_reports_a_subscription_joining_and_leaving},
 };
 
 }  // namespace

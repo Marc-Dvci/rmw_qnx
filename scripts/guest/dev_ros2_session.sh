@@ -25,6 +25,8 @@ run "ls -l /dev/ros2/topics"
 run "cat /dev/ros2/topics/chatter"
 run "sleep 2; grep -A1 latest /dev/ros2/topics/chatter"
 run "cat /dev/ros2/topics/parameter_events"
+run "ls /dev/ros2/nodes"
+run 'for n in $(ls /dev/ros2/nodes); do cat /dev/ros2/nodes/$n; echo; done'
 run "ls /dev/ros2/services"
 run "cat /dev/ros2/services/inversion"
 slay -f chatter inversion ros2graphd >/dev/null 2>&1

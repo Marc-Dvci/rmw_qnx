@@ -138,6 +138,49 @@ struct GuardCondition {
   Waitable w;
 };
 
+// A QoS event of one endpoint. ev->data of an rmw_event_t points to one of these, which lives in the endpoint. A
+// deadline event is armed with a QNX timer whose pulse (at the priority of the thread that created the event) is
+// received by the context's relay thread; no thread polls. The counts are computed from the clock when asked, so
+// a late pulse never changes them: missed = periods elapsed since the last publication, counted once each.
+int64_t mono_ns() {
+  timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return int64_t(t.tv_sec) * 1000000000 + t.tv_nsec;
+}
+
+struct EventState {
+  enum Kind { kNone, kDeadline, kMatched } kind = kNone;
+  uint32_t id = 0;
+  std::mutex mu;
+  Waitable w;
+  // deadline
+  int64_t deadline_ns = 0, last_ns = 0, folded = 0, reported = 0;
+  timer_t timer = 0;
+  bool timer_on = false;
+  // matched
+  rmw_qnx::Topic *topic = nullptr;
+  bool counts_subs = false;
+  uint32_t joins_seen = 0;
+  int64_t reported_current = 0, total = 0;
+
+  int64_t missed_locked(int64_t now) const { return deadline_ns > 0 ? folded + (now - last_ns) / deadline_ns : 0; }
+  void touch() {  // a publication: the periods that elapsed before it are missed for good
+    if (kind != kDeadline || deadline_ns <= 0) return;
+    std::lock_guard<std::mutex> l(mu);
+    const int64_t now = mono_ns();
+    folded += (now - last_ns) / deadline_ns;
+    last_ns = now;
+  }
+  uint32_t joins() const { return counts_subs ? topic->sub_joins() : topic->pub_joins(); }
+  int64_t current() const { return counts_subs ? int64_t(topic->subscribers()) : int64_t(topic->publishers()); }
+  bool ready() {
+    std::lock_guard<std::mutex> l(mu);
+    if (kind == kDeadline) return missed_locked(mono_ns()) > reported;
+    if (kind == kMatched && topic) return joins() != joins_seen || current() != reported_current;
+    return false;
+  }
+};
+
 struct ServiceImpl;
 
 }  // namespace
@@ -167,6 +210,9 @@ struct rmw_context_impl_s {
   std::map<uint64_t, rmw_qnx::core::Endpoint> my_endpoints;
   uint64_t next_graph_id = 1;
   std::vector<GuardCondition *> graph_gcs;  // of this context's nodes, triggered on every graph change
+  std::mutex ev_mu;
+  std::map<uint32_t, EventState *> events;  // live QoS events, by the id their timer pulse carries
+  uint32_t next_event = 1;
 };
 
 struct SubscriptionImpl {
@@ -180,6 +226,7 @@ struct SubscriptionImpl {
   uint8_t gid[RMW_GID_STORAGE_SIZE] = {};
   std::mutex mu;
   uint64_t graph_id = 0;
+  EventState matched_ev, inert_ev;
   uint64_t pos = 0;  // next ring sequence this subscription takes
   Waitable w;
   bool has_data() {
@@ -200,6 +247,83 @@ void trigger_graph(rmw_context_impl_s *ctx) {
     g->triggered = true;
     g->w.notify();
   }
+  // Matched events look at the endpoint counts: wake them too.
+  std::lock_guard<std::mutex> l2(ctx->ev_mu);
+  for (auto &kv : ctx->events)
+    if (kv.second->kind == EventState::kMatched) kv.second->w.notify();
+}
+
+constexpr int kPulseDeadline = _PULSE_CODE_MINAVAIL + 5;
+
+// Arms the one-shot timer for the next deadline boundary after the last publication. Call with es->mu held.
+void deadline_arm_locked(EventState *es) {
+  const int64_t now = mono_ns();
+  const int64_t next = es->last_ns + ((now - es->last_ns) / es->deadline_ns + 1) * es->deadline_ns;
+  itimerspec its{};
+  its.it_value.tv_sec = next / 1000000000;
+  its.it_value.tv_nsec = next % 1000000000;
+  timer_settime(es->timer, TIMER_ABSTIME, &its, nullptr);
+}
+
+// The timer pulse arrived (relay thread, holding ev_mu): wake waiters if a period was missed, and arm the next.
+void deadline_fire(EventState *es) {
+  bool missed;
+  {
+    std::lock_guard<std::mutex> l(es->mu);
+    if (!es->timer_on) return;
+    missed = es->missed_locked(mono_ns()) > es->reported;
+    deadline_arm_locked(es);
+  }
+  if (missed) es->w.notify();
+}
+
+// Registers an event of an endpoint once; later calls for the same event do nothing.
+void event_setup(rmw_context_impl_s *ctx, EventState *es, EventState::Kind kind, rmw_qnx::Topic *topic,
+                 bool counts_subs, uint64_t deadline_ns) {
+  if (es->kind != EventState::kNone) return;
+  es->kind = kind;
+  if (kind == EventState::kMatched) {
+    es->topic = topic;
+    es->counts_subs = counts_subs;
+    if (topic) {  // matches that exist when the event is created are not reported; later changes are
+      es->joins_seen = es->joins();
+      es->reported_current = es->current();
+      es->total = es->reported_current;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> l(ctx->ev_mu);
+    es->id = ctx->next_event++;
+    ctx->events[es->id] = es;
+  }
+  if (kind == EventState::kDeadline && deadline_ns > 0) {
+    std::lock_guard<std::mutex> l(es->mu);
+    es->deadline_ns = int64_t(deadline_ns);
+    es->last_ns = mono_ns();
+    sigevent sev;
+    SIGEV_PULSE_INIT(&sev, ctx->topic_coid, assigned_priority(), kPulseDeadline, int(es->id));
+    if (timer_create(CLOCK_MONOTONIC, &sev, &es->timer) == 0) {
+      es->timer_on = true;
+      deadline_arm_locked(es);
+    }
+  }
+}
+
+// The state of an rmw_event_t, or null for one never initialised here (a zero-initialised event is never ready).
+EventState *event_state_of(void *event) {
+  auto *ev = static_cast<rmw_event_t *>(event);
+  return ev && ev->implementation_identifier == kId ? static_cast<EventState *>(ev->data) : nullptr;
+}
+
+void event_teardown(rmw_context_impl_s *ctx, EventState *es) {
+  if (es->kind == EventState::kNone) return;
+  {
+    std::lock_guard<std::mutex> l(ctx->ev_mu);
+    ctx->events.erase(es->id);
+  }
+  std::lock_guard<std::mutex> l(es->mu);
+  if (es->timer_on) timer_delete(es->timer);
+  es->timer_on = false;
 }
 
 void relay_main(rmw_context_impl_s *ctx) {
@@ -207,6 +331,12 @@ void relay_main(rmw_context_impl_s *ctx) {
     _pulse p;
     if (MsgReceivePulse(ctx->topic_chid, &p, sizeof p, nullptr) == -1) continue;
     if (p.code == kPulseQuit) return;
+    if (p.code == kPulseDeadline) {
+      std::lock_guard<std::mutex> l(ctx->ev_mu);
+      auto it = ctx->events.find(uint32_t(p.value.sival_int));
+      if (it != ctx->events.end()) deadline_fire(it->second);
+      continue;
+    }
     if (p.code == kPulseGraph) {
       trigger_graph(ctx);
       continue;
@@ -941,6 +1071,9 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
     if (subs)
       for (size_t i = 0; i < subs->subscriber_count; i++)
         fn(static_cast<SubscriptionImpl *>(subs->subscribers[i])->w);
+    if (evs)
+      for (size_t i = 0; i < evs->event_count; i++)
+        if (EventState *es = event_state_of(evs->events[i])) fn(es->w);
   };
   // Register before checking, so a trigger between the check and the receive still wakes this wait.
   const int prio = assigned_priority();
@@ -966,6 +1099,9 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
     if (subs)
       for (size_t i = 0; i < subs->subscriber_count; i++)
         any |= static_cast<SubscriptionImpl *>(subs->subscribers[i])->has_data();
+    if (evs)
+      for (size_t i = 0; i < evs->event_count; i++)
+        if (EventState *es = event_state_of(evs->events[i])) any |= es->ready();
     return any;
   };
 
@@ -1024,7 +1160,11 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
     for (size_t i = 0; i < subs->subscriber_count; i++)
       if (!static_cast<SubscriptionImpl *>(subs->subscribers[i])->has_data()) subs->subscribers[i] = nullptr;
   if (evs)
-    for (size_t i = 0; i < evs->event_count; i++) evs->events[i] = nullptr;
+    for (size_t i = 0; i < evs->event_count; i++)
+    {
+      EventState *es = event_state_of(evs->events[i]);
+      if (!es || !es->ready()) evs->events[i] = nullptr;
+    }
   return timed_out ? RMW_RET_TIMEOUT : RMW_RET_OK;
 }
 
@@ -1362,6 +1502,7 @@ struct PublisherImpl {
   std::atomic<uint64_t> seq{1};
   rmw_context_impl_s *ctx = nullptr;
   uint64_t graph_id = 0;
+  EventState deadline_ev, matched_ev, inert_ev;  // inert: a created event of a type that is never raised
 };
 
 // The C++ introspection members of a message type, or nullptr if it has none.
@@ -1427,8 +1568,10 @@ rmw_ret_t rmw_destroy_publisher(rmw_node_t *node, rmw_publisher_t *p) {
   CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
   auto *e = static_cast<PublisherImpl *>(p->data);
-  graph_remove(e->ctx, e->graph_id);
+  event_teardown(e->ctx, &e->deadline_ev);
+  event_teardown(e->ctx, &e->matched_ev);
   if (e->topic) e->topic->remove_publisher();
+  graph_remove(e->ctx, e->graph_id);
   delete e;
   rcutils_allocator_t a = rcutils_get_default_allocator();
   a.deallocate(const_cast<char *>(p->topic_name), a.state);
@@ -1443,6 +1586,7 @@ rmw_ret_t rmw_return_loaned_message_from_publisher(const rmw_publisher_t *, void
 }
 static rmw_ret_t publish_cdr(PublisherImpl *e, const uint8_t *cdr, size_t len) {
   if (!e->topic) return RMW_RET_OK;  // C type support only: not carried yet
+  e->deadline_ev.touch();
   if (!e->topic->publish(e->gid, e->seq.fetch_add(1), cdr, len, kPulseTopic)) {
     RMW_SET_ERROR_MSG("rmw_qnx: message larger than a topic slot (16 KiB)");
     return RMW_RET_ERROR;
@@ -1559,8 +1703,9 @@ rmw_ret_t rmw_destroy_subscription(rmw_node_t *node, rmw_subscription_t *sub) {
   CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(sub, RMW_RET_INVALID_ARGUMENT);
   auto *s = static_cast<SubscriptionImpl *>(sub->data);
-  graph_remove(s->ctx, s->graph_id);
+  event_teardown(s->ctx, &s->matched_ev);
   if (s->topic) s->topic->remove_subscriber(s->slot);
+  graph_remove(s->ctx, s->graph_id);
   {
     std::lock_guard<std::mutex> l(s->ctx->mu);
     s->ctx->subs.erase(s->id);
@@ -1650,8 +1795,19 @@ static rmw_ret_t take_serialized(const rmw_subscription_t *sub, rmw_serialized_m
 rmw_ret_t rmw_publisher_event_init(rmw_event_t *ev, const rmw_publisher_t *e, rmw_event_type_t type) {
   RMW_CHECK_ARGUMENT_FOR_NULL(ev, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(e, RMW_RET_INVALID_ARGUMENT);
+  auto *p = static_cast<PublisherImpl *>(e->data);
+  EventState *es = nullptr;
+  if (type == RMW_EVENT_OFFERED_DEADLINE_MISSED) {
+    es = &p->deadline_ev;
+    event_setup(p->ctx, es, EventState::kDeadline, nullptr, false, to_core(p->qos).deadline_ns);
+  } else if (type == RMW_EVENT_PUBLICATION_MATCHED && p->topic) {
+    es = &p->matched_ev;
+    event_setup(p->ctx, es, EventState::kMatched, p->topic.get(), true, 0);
+  } else {
+    es = &p->inert_ev;  // created, never raised
+  }
   ev->implementation_identifier = kId;
-  ev->data = e->data;
+  ev->data = es;
   ev->event_type = type;
   return RMW_RET_OK;
 }
@@ -1710,8 +1866,14 @@ rmw_ret_t rmw_fini_subscription_allocation(rmw_subscription_allocation_t *) {
 rmw_ret_t rmw_subscription_event_init(rmw_event_t *ev, const rmw_subscription_t *e, rmw_event_type_t type) {
   RMW_CHECK_ARGUMENT_FOR_NULL(ev, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(e, RMW_RET_INVALID_ARGUMENT);
+  auto *s = static_cast<SubscriptionImpl *>(e->data);
+  EventState *es = &s->inert_ev;  // created, never raised, unless supported below
+  if (type == RMW_EVENT_SUBSCRIPTION_MATCHED && s->topic) {
+    es = &s->matched_ev;
+    event_setup(s->ctx, es, EventState::kMatched, s->topic.get(), false, 0);
+  }
   ev->implementation_identifier = kId;
-  ev->data = e->data;
+  ev->data = es;
   ev->event_type = type;
   return RMW_RET_OK;
 }
@@ -1758,10 +1920,39 @@ rmw_ret_t rmw_take_event(const rmw_event_t *ev, void *info, bool *taken) {
   CHECK_ID(ev, RMW_RET_INVALID_ARGUMENT);
   RMW_CHECK_ARGUMENT_FOR_NULL(info, RMW_RET_INVALID_ARGUMENT);
   RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
-  *taken = false;  // no event is raised yet
+  *taken = false;
+  auto *es = static_cast<EventState *>(ev->data);
+  std::lock_guard<std::mutex> l(es->mu);
+  if (es->kind == EventState::kDeadline) {
+    const int64_t cur = es->missed_locked(mono_ns());
+    if (cur <= es->reported) return RMW_RET_OK;
+    auto *st = static_cast<rmw_offered_deadline_missed_status_t *>(info);
+    st->total_count = int32_t(cur);
+    st->total_count_change = int32_t(cur - es->reported);
+    es->reported = cur;
+    *taken = true;
+  } else if (es->kind == EventState::kMatched) {
+    const uint32_t joins = es->joins();
+    const int64_t cur = es->current();
+    if (joins == es->joins_seen && cur == es->reported_current) return RMW_RET_OK;
+    auto *st = static_cast<rmw_matched_status_t *>(info);
+    es->total += int64_t(uint32_t(joins - es->joins_seen));
+    st->total_count = size_t(es->total);
+    st->total_count_change = int32_t(joins - es->joins_seen);
+    st->current_count = size_t(cur);
+    st->current_count_change = int32_t(cur - es->reported_current);
+    es->joins_seen = joins;
+    es->reported_current = cur;
+    *taken = true;
+  }
   return RMW_RET_OK;
 }
-bool rmw_event_type_is_supported(rmw_event_type_t) { return false; }
+// Deadline missed (offered) and matched events are raised. Requested-deadline, liveliness and incompatible-QoS
+// events are not.
+bool rmw_event_type_is_supported(rmw_event_type_t t) {
+  return t == RMW_EVENT_OFFERED_DEADLINE_MISSED || t == RMW_EVENT_PUBLICATION_MATCHED ||
+         t == RMW_EVENT_SUBSCRIPTION_MATCHED;
+}
 // ---- graph queries: answered from every live context's graph file ----
 
 static rmw_ret_t check_query_node(const rmw_node_t *node) {
@@ -1997,7 +2188,7 @@ rmw_ret_t rmw_subscription_set_on_new_message_callback(rmw_subscription_t *, rmw
 }
 rmw_ret_t rmw_event_set_callback(rmw_event_t *ev, rmw_event_callback_t, const void *) {
   CHECK_ID(ev, RMW_RET_INVALID_ARGUMENT);
-  return RMW_RET_OK;  // no event is raised yet, so the callback is never called
+  return RMW_RET_OK;  // wait sets are the way to learn of an event; the callback is never called
 }
 bool rmw_feature_supported(rmw_feature_t) { return false; }
 rmw_ret_t rmw_take_dynamic_message(const rmw_subscription_t *, rosidl_dynamic_typesupport_dynamic_data_t *, bool *,

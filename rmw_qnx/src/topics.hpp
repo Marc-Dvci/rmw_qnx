@@ -55,6 +55,9 @@ struct TopicHeader {
   std::atomic<uint32_t> pubs;
   uint32_t reserved2;
   SubEntry subs[kMaxSubs];
+  // Endpoints that ever joined this object: matched events count the joins that happened between two looks.
+  std::atomic<uint32_t> sub_joins;
+  std::atomic<uint32_t> pub_joins;
 };
 
 constexpr size_t kRingOffset = (sizeof(TopicHeader) + 63) & ~size_t{63};
@@ -86,7 +89,12 @@ class Topic {
   core::Ring &ring() { return ring_; }
   TopicHeader *header() { return h_; }
 
-  void add_publisher() { h_->pubs.fetch_add(1); }
+  void add_publisher() {
+    h_->pubs.fetch_add(1);
+    h_->pub_joins.fetch_add(1);
+  }
+  uint32_t sub_joins() const { return h_->sub_joins.load(); }
+  uint32_t pub_joins() const { return h_->pub_joins.load(); }
   void remove_publisher() { h_->pubs.fetch_sub(1); }
   size_t publishers() const { return h_->pubs.load(); }
   size_t subscribers() const {
@@ -105,6 +113,7 @@ class Topic {
         h_->subs[i].id = id;
         h_->subs[i].prio = prio;
         h_->subs[i].state.store(2, std::memory_order_release);
+        h_->sub_joins.fetch_add(1);
         return i;
       }
     }
