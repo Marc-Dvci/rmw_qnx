@@ -17,7 +17,13 @@ bash "$REPO/qnx/boot.sh" || exit 1
 if [ "${COPY:-0}" = 1 ] || ! $G 'test -f /data/ros2/x86_64/lib/librmw_qnx.so'; then
     wsl.exe -d Ubuntu-22.04 -- cat "$TAR" | $G 'mkdir -p /data/ros2 && cd /data/ros2 && rm -rf x86_64 && tar -xzf -'
 fi
-ENV='export R=/data/ros2/x86_64; export LD_LIBRARY_PATH=$R/lib; export AMENT_PREFIX_PATH=$R; export ROS_LOG_DIR=/tmp/roslog; export ROS_DOMAIN_ID=7; I=$R/lib/rmwqnx_inversion/inversion'
+# Cyclone DDS on the loopback interface with unicast discovery: the guest's user-mode network has no multicast.
+$G 'cat > /data/ros2/cyclonedds.xml' <<'EOF'
+<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo0"/></Interfaces>
+<AllowMulticast>false</AllowMulticast></General><Discovery><ParticipantIndex>auto</ParticipantIndex>
+<Peers><Peer address="127.0.0.1"/></Peers></Discovery></Domain></CycloneDDS>
+EOF
+ENV='export R=/data/ros2/x86_64; export LD_LIBRARY_PATH=$R/lib; export AMENT_PREFIX_PATH=$R; export ROS_LOG_DIR=/tmp/roslog; export ROS_DOMAIN_ID=7; export CYCLONEDDS_URI=file:///data/ros2/cyclonedds.xml; I=$R/lib/rmwqnx_inversion/inversion'
 {
     echo "# inversion through ROS 2, QEMU, WHPX, 2 vCPUs, all three processes pinned to CPU 0; $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     for rmw in $RMWS; do
