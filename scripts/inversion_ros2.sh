@@ -10,12 +10,16 @@ N="${1:-200}"
 shift || true
 RMWS="${*:-rmw_fastrtps_cpp rmw_cyclonedds_cpp rmw_qnx}"
 G="bash $REPO/qnx/g.sh"
-TAR="$(wsl.exe -d Ubuntu-22.04 -- bash -c 'echo $HOME' | tr -d '\r')/rmw_qnx-work/ros2-x86_64.tar.gz"
+TAR_WSL='$HOME/rmw_qnx-work/ros2-x86_64.tar.gz'
 mkdir -p "$REPO/results"
 OUT="$REPO/results/inversion-ros2-$(date +%Y%m%d-%H%M%S).txt"
 bash "$REPO/qnx/boot.sh" || exit 1
 if [ "${COPY:-0}" = 1 ] || ! $G 'test -f /data/ros2/x86_64/lib/librmw_qnx.so'; then
-    wsl.exe -d Ubuntu-22.04 -- cat "$TAR" | $G 'mkdir -p /data/ros2 && cd /data/ros2 && rm -rf x86_64 && tar -xzf -'
+    # Through a file on the Windows side: a pipe out of wsl.exe is not binary-safe.
+    RW="$(wsl.exe -d Ubuntu-22.04 -- wslpath -u "$(cygpath -w "$REPO")" | tr -d '\r')"
+    wsl.exe -d Ubuntu-22.04 -- bash -c "cp $TAR_WSL '$RW/.guest/ros2-x86_64.tar.gz'"
+    $G 'mkdir -p /data/ros2 && cat > /data/ros2/ros2-x86_64.tar.gz' < "$REPO/.guest/ros2-x86_64.tar.gz"
+    $G 'cd /data/ros2 && rm -rf x86_64 && tar -xzf ros2-x86_64.tar.gz && ls x86_64/lib | wc -l'
 fi
 # Cyclone DDS on the loopback interface with unicast discovery: the guest's user-mode network has no multicast.
 $G 'cat > /data/ros2/cyclonedds.xml' <<'EOF'
