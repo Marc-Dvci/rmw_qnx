@@ -29,6 +29,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -36,6 +37,7 @@
 #include "cdr.hpp"
 #include "names.hpp"
 #include "qos.hpp"
+#include "sendq.hpp"
 #include "rmw/time.h"
 #include "rcutils/strdup.h"
 #include "rmw/allocators.h"
@@ -112,9 +114,10 @@ struct Waitable {
     auto it = std::find(waiters.begin(), waiters.end(), std::make_pair(coid, prio));
     if (it != waiters.end()) waiters.erase(it);
   }
-  void notify() {
+  void notify(int except_coid = -1) {
     std::lock_guard<std::mutex> l(mu);
-    for (const auto &w : waiters) MsgSendPulse(w.first, w.second, kPulseWake, 0);
+    for (const auto &w : waiters)
+      if (w.first != except_coid) MsgSendPulse(w.first, w.second, kPulseWake, 0);
   }
 };
 
@@ -231,7 +234,7 @@ struct ClientImpl {
   uint8_t gid[RMW_GID_STORAGE_SIZE];
   std::atomic<int64_t> next_seq{1};
   std::mutex mu;
-  std::deque<std::pair<int64_t, std::vector<uint8_t>>> to_send;
+  rmw_qnx::core::SendQueue to_send;  // each request with its caller's priority
   std::deque<Response> responses;
   Waitable w;
   int chid = -1, coid = -1;
@@ -284,14 +287,14 @@ void sender_main(ClientImpl *c) {
     if (MsgReceivePulse(c->chid, &pulse, sizeof pulse, nullptr) == -1) continue;
     if (pulse.code == kPulseQuit) return;
     if (pulse.code != kPulseSend) continue;
-    // This thread now runs at the priority of the caller that sent the pulse: one request per pulse keeps each
-    // request at its own caller's priority.
-    std::pair<int64_t, std::vector<uint8_t>> item;
+    // This thread now runs at the priority of the caller that sent the pulse, which the pulse also names. Pending
+    // pulses arrive highest priority first, so take the oldest request of that priority, not the oldest request.
+    rmw_qnx::core::Outgoing item;
     {
       std::lock_guard<std::mutex> l(c->mu);
-      if (c->to_send.empty()) continue;
-      item = std::move(c->to_send.front());
-      c->to_send.pop_front();
+      auto o = c->to_send.take(pulse.value.sival_int);
+      if (!o) continue;
+      item = std::move(*o);
     }
     pid_t pid;
     int chid;
@@ -307,12 +310,12 @@ void sender_main(ClientImpl *c) {
     ReqHdr h{};
     h.magic = kReqMagic;
     h.service = index;
-    h.seq = item.first;
+    h.seq = item.seq;
     std::memcpy(h.guid, c->gid, RMW_GID_STORAGE_SIZE);
-    h.len = static_cast<uint32_t>(item.second.size());
+    h.len = static_cast<uint32_t>(item.bytes.size());
     iov_t siov[2], riov[1];
     SETIOV(&siov[0], &h, sizeof h);
-    SETIOV(&siov[1], item.second.data(), item.second.size());
+    SETIOV(&siov[1], item.bytes.data(), item.bytes.size());
     SETIOV(&riov[0], reply.data(), reply.size());
     if (MsgSendv(c->srv_coid, siov, 2, riov, 1) == -1) {
       ConnectDetach(c->srv_coid);
@@ -333,9 +336,11 @@ void sender_main(ClientImpl *c) {
 }
 
 // A request has arrived on the context channel: queue it on its service. The receiving thread keeps the client's
-// priority until it next receives.
+// priority until it next receives. Waits on the channel the request arrived on are not pulsed: the thread that
+// received it returns from rmw_wait anyway, and a pulse to itself, queued at the priority it had before this request,
+// would raise it again (a server that just took a request from priority 10 would run it at 20).
 void accept_request(rmw_context_impl_s *ctx, rcvid_t rcvid, const _msg_info &info, const uint8_t *buf,
-                    size_t got) {
+                    size_t got, int receiving_coid) {
   if (got < sizeof(ReqHdr)) {
     MsgError(rcvid, EINVAL);
     return;
@@ -372,7 +377,7 @@ void accept_request(rmw_context_impl_s *ctx, rcvid_t rcvid, const _msg_info &inf
     std::lock_guard<std::mutex> l(s->mu);
     s->queue.push_back(std::move(p));
   }
-  s->w.notify();
+  s->w.notify(receiving_coid);
 }
 
 // The C++ introspection members of a service, or nullptr. A service that offers only the C type support (rcl's own
@@ -404,6 +409,19 @@ const its::ServiceMembers *service_members(const rosidl_service_type_support_t *
 rmw_ret_t unsupported(const char *what) {
   RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("rmw_qnx: %s is not supported yet", what);
   return RMW_RET_UNSUPPORTED;
+}
+
+// Deserialises at the RMW boundary: a hostile buffer fails, and an allocation failure while filling the message is
+// an error return, never an exception through rmw's C interface.
+bool deserialize_safe(const its::MessageMembers *m, void *msg, const uint8_t *data, size_t len) {
+  if (!m) return false;
+  CdrReader r(data, len);
+  if (!r.ok()) return false;
+  try {
+    return rmw_qnx::deserialize_cpp(m, msg, r);
+  } catch (const std::exception &) {
+    return false;
+  }
 }
 
 rmw_qnx::core::Qos to_core(const rmw_qos_profile_t &q) {
@@ -799,7 +817,7 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
     const rcvid_t rcvid = MsgReceive(chid, buf.data(), buf.size(), &info);
     if (rcvid > 0) {
       const long got = info.msglen < long(buf.size()) ? info.msglen : long(buf.size());
-      accept_request(ctx, rcvid, info, buf.data(), size_t(got));
+      accept_request(ctx, rcvid, info, buf.data(), size_t(got), coid);
     }
     // A pulse (rcvid 0) only wakes; a timeout (ETIMEDOUT) is checked at the top.
   }
@@ -907,8 +925,7 @@ rmw_ret_t rmw_take_request(const rmw_service_t *srv, rmw_service_info_t *hdr, vo
     p = std::move(s->queue.front());
     s->queue.pop_front();
   }
-  CdrReader r(p.data.data(), p.data.size());
-  if (!r.ok() || !s->req || !rmw_qnx::deserialize_cpp(s->req, ros_request, r)) {
+  if (!deserialize_safe(s->req, ros_request, p.data.data(), p.data.size())) {
     MsgError(p.rcvid, EBADMSG);
     RMW_SET_ERROR_MSG("rmw_qnx: malformed request");
     return RMW_RET_ERROR;
@@ -1027,12 +1044,15 @@ rmw_ret_t rmw_send_request(const rmw_client_t *cli, const void *ros_request, int
     return RMW_RET_ERROR;
   }
   *seq = c->next_seq.fetch_add(1);
+  sched_param sp{};
+  SchedGet(0, 0, &sp);
+  const int prio = sp.sched_curpriority;
   {
     std::lock_guard<std::mutex> l(c->mu);
-    c->to_send.emplace_back(*seq, std::move(body));
+    c->to_send.push(rmw_qnx::core::Outgoing{*seq, prio, std::move(body)});
   }
-  // Priority -1: the pulse carries this thread's priority to the sender thread.
-  if (MsgSendPulse(c->coid, -1, kPulseSend, 0) == -1) {
+  // The pulse runs the sender thread at this thread's priority and names it, so the sender takes this request.
+  if (MsgSendPulse(c->coid, prio, kPulseSend, prio) == -1) {
     RMW_SET_ERROR_MSG("rmw_qnx: MsgSendPulse failed");
     return RMW_RET_ERROR;
   }
@@ -1053,8 +1073,7 @@ rmw_ret_t rmw_take_response(const rmw_client_t *cli, rmw_service_info_t *hdr, vo
     resp = std::move(c->responses.front());
     c->responses.pop_front();
   }
-  CdrReader r(resp.data.data(), resp.data.size());
-  if (!r.ok() || !c->res || !rmw_qnx::deserialize_cpp(c->res, ros_response, r)) {
+  if (!deserialize_safe(c->res, ros_response, resp.data.data(), resp.data.size())) {
     RMW_SET_ERROR_MSG("rmw_qnx: malformed response");
     return RMW_RET_ERROR;
   }
@@ -1256,6 +1275,10 @@ rmw_ret_t rmw_publish_serialized_message(const rmw_publisher_t *p, const rmw_ser
                                          rmw_publisher_allocation_t *) {
   CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
   RMW_CHECK_ARGUMENT_FOR_NULL(m, RMW_RET_INVALID_ARGUMENT);
+  if (!m->buffer && m->buffer_length) {
+    RMW_SET_ERROR_MSG("rmw_qnx: serialized message has a length but no buffer");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
   return publish_cdr(static_cast<PublisherImpl *>(p->data), m->buffer, m->buffer_length);
 }
 rmw_ret_t rmw_publish_loaned_message(const rmw_publisher_t *, void *, rmw_publisher_allocation_t *) {
@@ -1319,6 +1342,17 @@ rmw_subscription_t *rmw_create_subscription(const rmw_node_t *node, const rosidl
                  : s->topic->ring().reader_start_now();
     // Woken at the priority of the thread that creates the subscription.
     s->slot = s->topic->add_subscriber(ctx->topic_chid, s->id, assigned_priority());
+    if (s->slot < 0) {
+      // A subscription the publishers cannot pulse would never wake: refuse it and undo the registration.
+      {
+        std::lock_guard<std::mutex> l(ctx->mu);
+        ctx->subs.erase(s->id);
+      }
+      delete s;
+      RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("rmw_qnx: topic %s already has %d subscriptions, the most it holds", name,
+                                           rmw_qnx::kMaxSubs);
+      return nullptr;
+    }
   }
   rmw_subscription_t *sub = rmw_subscription_allocate();
   sub->implementation_identifier = kId;
@@ -1397,8 +1431,7 @@ static rmw_ret_t take_into(const rmw_subscription_t *sub, void *msg, bool *taken
   *taken = false;
   static thread_local std::vector<uint8_t> bytes;
   if (!take_bytes(s, &bytes, info)) return RMW_RET_OK;
-  CdrReader r(bytes.data(), bytes.size());
-  if (!r.ok() || !rmw_qnx::deserialize_cpp(s->members, msg, r)) {
+  if (!deserialize_safe(s->members, msg, bytes.data(), bytes.size())) {
     RMW_SET_ERROR_MSG("rmw_qnx: malformed message");
     return RMW_RET_ERROR;
   }
@@ -1456,6 +1489,10 @@ rmw_ret_t rmw_serialize(const void *msg, const rosidl_message_type_support_t *ts
 }
 rmw_ret_t rmw_deserialize(const rmw_serialized_message_t *in, const rosidl_message_type_support_t *ts, void *msg) {
   RMW_CHECK_ARGUMENT_FOR_NULL(in, RMW_RET_INVALID_ARGUMENT);
+  if (!in->buffer && in->buffer_length) {
+    RMW_SET_ERROR_MSG("rmw_qnx: serialized message has a length but no buffer");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
   RMW_CHECK_ARGUMENT_FOR_NULL(ts, RMW_RET_INVALID_ARGUMENT);
   RMW_CHECK_ARGUMENT_FOR_NULL(msg, RMW_RET_INVALID_ARGUMENT);
   bool ok = false;
@@ -1464,8 +1501,7 @@ rmw_ret_t rmw_deserialize(const rmw_serialized_message_t *in, const rosidl_messa
     if (ok) RMW_SET_ERROR_MSG("rmw_qnx: deserialising C type support messages is not supported yet");
     return RMW_RET_ERROR;
   }
-  CdrReader r(in->buffer, in->buffer_length);
-  if (!r.ok() || !rmw_qnx::deserialize_cpp(m, msg, r)) {
+  if (!deserialize_safe(m, msg, in->buffer, in->buffer_length)) {
     RMW_SET_ERROR_MSG("rmw_qnx: malformed serialized message");
     return RMW_RET_ERROR;
   }

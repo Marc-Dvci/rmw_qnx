@@ -1,0 +1,8 @@
+# rmw_qnx guest checks, QEMU, WHPX, 2 vCPUs; 2026-11-07T06:07:34Z
+  base 5, pulse at 20 received: priority 20
+  then pulse at 10 received: priority 10
+  message from priority 20 received: priority 20
+  message from priority 10 received: priority 10
+PASS observe_priority_after_receive
+checks: 1 passed, 0 failed
+exit=0

@@ -1,0 +1,20 @@
+# rmw_qnx guest checks, QEMU, WHPX, 2 vCPUs; 2026-11-07T06:00:20Z
+  request from priority 10 served at priority 20
+  request from priority 20 served at priority 20
+  expected s.first == s.second: served at the caller's priority (error not set)
+FAIL two_callers_on_one_client_are_each_served_at_their_own_priority
+  expected extra == nullptr: the 33rd subscription to fail (error not set)
+FAIL the_33rd_subscription_on_a_topic_fails_and_leaves_32_registered
+terminate called after throwing an instance of 'std::bad_alloc'
+  what():  std::bad_alloc
+  child ended by signal 6
+FAIL a_forged_nested_sequence_length_is_rejected
+  child ended by signal 11
+FAIL a_null_buffer_with_a_length_is_rejected
+  expected !exists(shm): /dev/shmem/rmwqnx.d0.%2Frmwqnx_check_retype_929815 gone after the last endpoint (error not set)
+FAIL a_destroyed_topic_is_gone_and_its_name_takes_another_type
+  400 rounds: 0 endpoint creations failed, 0 publications not received
+  expected !exists("/dev/shmem/rmwqnx.d0.%2F" + name.substr(1)): the topic is gone at the end (error not set)
+FAIL endpoints_coming_and_going_on_one_topic_never_split_it
+checks: 0 passed, 6 failed
+exit=6
