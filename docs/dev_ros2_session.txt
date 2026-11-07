@@ -1,0 +1,86 @@
+# QNX SDP 8.0, x86_64 guest (QEMU, WHPX), recorded 2026-11-07 with scripts/dev_ros2_demo.sh
+# ros2graphd &
+ros2graphd: /dev/ros2 for ROS domain 0
+# RMW_IMPLEMENTATION=rmw_qnx chatter talk 600 200 &        (a talker on /chatter, 5 messages a second)
+# RMW_IMPLEMENTATION=rmw_qnx chatter listen 1000 120 &      (a listener on /chatter)
+# RMW_IMPLEMENTATION=rmw_qnx inversion server &            (a service, /inversion)
+
+# ls /dev/ros2
+services
+topics
+
+# ls /dev/ros2/topics
+chatter
+parameter_events
+
+# ls -l /dev/ros2/topics
+total 2
+-r--r--r--  1 root root 320 2026-11-07 05:23 chatter
+-r--r--r--  1 root root 841 2026-11-07 05:23 parameter_events
+
+# cat /dev/ros2/topics/chatter
+topic:        /chatter
+type:         example_interfaces/msg/String
+publishers:   1
+subscribers:  1
+written:      108 messages since the topic was created
+transport:    shared-memory ring, 64 slots of 16384 bytes, /rmwqnx.d0.%2Fchatter
+latest:       message 108 in the ring, number 21 from its publisher
+  data: hello 21
+
+# sleep 2; grep -A1 latest /dev/ros2/topics/chatter
+latest:       message 118 in the ring, number 31 from its publisher
+  data: hello 31
+
+# cat /dev/ros2/topics/parameter_events
+topic:        /parameter_events
+type:         rcl_interfaces/msg/ParameterEvent
+publishers:   2
+subscribers:  3
+written:      24 messages since the topic was created
+transport:    shared-memory ring, 64 slots of 16384 bytes, /rmwqnx.d0.%2Fparameter_events
+latest:       message 24 in the ring, number 6 from its publisher
+  stamp:
+    sec: 1794029035
+    nanosec: 118903808
+  node: /talker
+  new_parameters: (1 items)
+    -
+      name: qos_overrides./parameter_events.publisher.reliability
+      value:
+        type: 4
+        bool_value: false
+        integer_value: 0
+        double_value: 0
+        string_value: reliable
+        byte_array_value: []
+        bool_array_value: []
+        integer_array_value: []
+        double_array_value: []
+        string_array_value: []
+  changed_parameters: (0 items)
+  deleted_parameters: (0 items)
+
+# ls /dev/ros2/services
+inversion
+inversion_server%2Fget_type_description
+listener%2Fdescribe_parameters
+listener%2Fget_parameter_types
+listener%2Fget_parameters
+listener%2Fget_type_description
+listener%2Flist_parameters
+listener%2Fset_parameters
+listener%2Fset_parameters_atomically
+talker%2Fdescribe_parameters
+talker%2Fget_parameter_types
+talker%2Fget_parameters
+talker%2Fget_type_description
+talker%2Flist_parameters
+talker%2Fset_parameters
+talker%2Fset_parameters_atomically
+
+# cat /dev/ros2/services/inversion
+service:      /inversion
+server:       pid 1646617, channel 1, service 2
+transport:    MsgSend/MsgReply: the server's thread runs at the calling client's priority
+

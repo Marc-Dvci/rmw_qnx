@@ -216,7 +216,7 @@ std::string render_topic(const std::string &ros_name) {
   printf_to(out, "type:         %s\n", h->type);
   printf_to(out, "publishers:   %u\n", h->pubs.load());
   printf_to(out, "subscribers:  %zu\n", subs);
-  printf_to(out, "published:    %llu messages\n", static_cast<unsigned long long>(head));
+  printf_to(out, "written:      %llu messages since the topic was created\n", static_cast<unsigned long long>(head));
   printf_to(out, "transport:    shared-memory ring, %u slots of %u bytes, %s\n", ring.count(), ring.payload(),
             shm.c_str());
   if (head == 0) {
@@ -237,7 +237,7 @@ std::string render_topic(const std::string &ros_name) {
     } else {
       uint64_t pub_seq = 0;
       std::memcpy(&pub_seq, buf.data() + 16, 8);
-      printf_to(out, "latest:       message %llu, sequence %llu from its publisher\n",
+      printf_to(out, "latest:       message %llu in the ring, number %llu from its publisher\n",
                 static_cast<unsigned long long>(t.seq + 1), static_cast<unsigned long long>(pub_seq));
       std::vector<uint64_t> storage(mm->size_of_ / 8 + 1);
       mm->init_function(storage.data(), rosidl_runtime_cpp::MessageInitialization::ALL);
@@ -298,7 +298,8 @@ int io_open(resmgr_context_t *ctp, io_open_t *msg, RESMGR_HANDLE_T *handle, void
     if (std::find(names.begin(), names.end(), ros_name) == names.end()) return ENOENT;
     data = kind == "topics" ? render_topic(ros_name) : render_service(ros_name);
   }
-  if (!dir && (msg->connect.ioflag & O_ACCMODE) != O_RDONLY) return EROFS;
+  // ioflag carries _IO_FLAG_RD/_IO_FLAG_WR (the open mode plus one): everything here is read-only.
+  if (!dir && (msg->connect.ioflag & _IO_FLAG_WR)) return EROFS;
   auto *o = static_cast<Ocb *>(calloc(1, sizeof(Ocb)));
   if (!o) return ENOMEM;
   iofunc_attr_t *attr = static_cast<iofunc_attr_t *>(handle);
@@ -327,7 +328,9 @@ int io_read(resmgr_context_t *ctp, io_read_t *msg, RESMGR_OCB_T *ocb_) {
   Ocb *o = reinterpret_cast<Ocb *>(ocb_);
   int st = iofunc_read_verify(ctp, msg, &o->hdr, nullptr);
   if (st != EOK) return st;
-  if ((msg->i.xtype & _IO_XTYPE_MASK) != _IO_XTYPE_NONE) return ENOSYS;
+  const uint32_t xtype = msg->i.xtype & _IO_XTYPE_MASK;
+  // readdir() reads a directory with _IO_XTYPE_READDIR; plain reads come with _IO_XTYPE_NONE.
+  if (xtype != _IO_XTYPE_NONE && !(o->is_dir && xtype == _IO_XTYPE_READDIR)) return ENOSYS;
   const size_t want = msg->i.nbytes;
   if (!o->is_dir) {
     const size_t off = size_t(o->hdr.offset);
