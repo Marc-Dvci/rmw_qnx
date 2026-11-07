@@ -15,7 +15,8 @@ $Dir = (Resolve-Path $Dir).Path
 $pidFile = Join-Path $Dir "qemu.pid"
 if ($Stop) {
     if (Test-Path $pidFile) {
-        $id = [int](Get-Content $pidFile -Raw).Trim()
+        # QEMU does not truncate its pidfile: a shorter PID leaves the end of the old one behind. Read the first line.
+        $id = [int]((Get-Content $pidFile -TotalCount 1).Trim())
         $p = Get-Process -Id $id -ErrorAction SilentlyContinue
         if ($p -and $p.ProcessName -like "qemu-system*") { Stop-Process -Id $id -Force; "stopped pid $id" }
         else { "no guest running under pid $id" }
@@ -23,7 +24,7 @@ if ($Stop) {
     return
 }
 if (Test-Path $pidFile) {
-    $id = [int](Get-Content $pidFile -Raw).Trim()
+    $id = [int]((Get-Content $pidFile -TotalCount 1).Trim())
     $p = Get-Process -Id $id -ErrorAction SilentlyContinue
     if ($p -and $p.ProcessName -like "qemu-system*") { "already running as pid $id"; return }
 }
