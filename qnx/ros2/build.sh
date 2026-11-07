@@ -6,7 +6,9 @@
 #   qnx/ros2/build.sh [WORK] [PACKAGES...]    default WORK=~/rmw_qnx-work
 #
 # PACKAGES (colcon --packages-up-to) defaults to everything the inversion scenario and the comparison need. Packages
-# that already finished are skipped, so a failed build resumes where it stopped.
+# that already finished are skipped, so a failed build resumes where it stopped. RMWQNX_SKIP names packages to leave
+# out (for example "fastrtps rmw_fastrtps_cpp rmw_fastrtps_shared_cpp rmw_fastrtps_dynamic_cpp" to get to Cyclone
+# DDS first).
 #
 # Python packages (rclpy, rosidl_python) are left out: the guest's Python is 3.13, which build-files does not target,
 # and nothing here needs Python on the guest.
@@ -39,7 +41,7 @@ df -h /mnt/c | tail -1
 # shellcheck disable=SC2086
 colcon build --merge-install --parallel-workers 2 --packages-skip-build-finished \
     --build-base "$WORK/ros2-build/x86_64" --install-base "$WORK/ros2-install/x86_64" \
-    --packages-up-to $PKGS \
+    --packages-up-to $PKGS ${RMWQNX_SKIP:+--packages-skip $RMWQNX_SKIP} \
     --cmake-args \
     -DCMAKE_TOOLCHAIN_FILE="$ROS/platform/qnx.nto.toolchain.cmake" \
     -DCMAKE_MODULE_PATH="$ROS/modules" \
