@@ -41,7 +41,7 @@ df -h /mnt/c | tail -1
 # shellcheck disable=SC2086
 colcon build --merge-install --parallel-workers 2 --packages-skip-build-finished \
     --build-base "$WORK/ros2-build/x86_64" --install-base "$WORK/ros2-install/x86_64" \
-    --packages-up-to $PKGS ${RMWQNX_SKIP:+--packages-skip $RMWQNX_SKIP} \
+    --packages-up-to $PKGS ${RMWQNX_SKIP:+--packages-ignore $RMWQNX_SKIP} \
     --cmake-args \
     -DCMAKE_TOOLCHAIN_FILE="$ROS/platform/qnx.nto.toolchain.cmake" \
     -DCMAKE_MODULE_PATH="$ROS/modules" \
