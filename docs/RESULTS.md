@@ -16,7 +16,7 @@ bash scripts/killtest_all.sh
 
 It boots the guest, removes `/data/ros2`, installs the ROS 2 build from the work folder, runs the scenario three
 times per middleware with and without the load (`scripts/inversion_ros2.sh run`), runs one traced loaded run per
-middleware (`scripts/inversion_ros2.sh trace`), and stops the guest. It took 3 minutes.
+middleware (`scripts/inversion_ros2.sh trace`), and stops the guest. With three middlewares it took 3 minutes.
 
 **Setup** ([`bench/inversion_ros2/src/inversion.cpp`](../bench/inversion_ros2/src/inversion.cpp), run by
 [`scripts/guest/run_inversion.sh`](../scripts/guest/run_inversion.sh)): three processes, the same binary for every
@@ -29,53 +29,60 @@ middleware, which is chosen with `RMW_IMPLEMENTATION` and nothing else.
   The middleware's own threads keep their process's priority and may use either CPU.
 - 200 requests per run, after 5 warm-up calls.
 
-**Result** ([`results/inversion-ros2-20261107-053325.txt`](../results/inversion-ros2-20261107-053325.txt)), every run:
+**Result** ([`results/inversion-ros2-20261107-063223.txt`](../results/inversion-ros2-20261107-063223.txt), the run of
+`killtest_all.sh` with all three middlewares), every run:
 
-| Middleware | Load | Run | Deadline misses | Callback ran at the client's priority (20) | Requests sent mid-burst | Of those, the load finished first |
+| Middleware | Load | Runs | Deadline misses | Callback ran at the client's priority (20) | Requests sent mid-burst | Of those, the load finished first |
 |---|---|---|---|---|---|---|
+| Fast DDS | off | 1, 2, 3 | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | - |
 | Cyclone DDS | off | 1, 2, 3 | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | - |
 | rmw_qnx | off | 1, 2, 3 | 0, 0, 0 | 200, 200, 200 | 0, 0, 0 | - |
+| Fast DDS | on | 1, 2, 3 | **40, 40, 40** | 0, 0, 0 | 40, 40, 40 | **40, 40, 40** |
 | Cyclone DDS | on | 1, 2, 3 | **40, 40, 40** | 0, 0, 0 | 40, 40, 40 | **40, 40, 40** |
-| rmw_qnx | on | 1, 2, 3 | **0, 0, 1** | **200, 200, 200** | 80, 80, 80 | **0, 0, 0** |
+| rmw_qnx | on | 1, 2, 3 | **0, 0, 0** | **200, 200, 200** | 80, 80, 80 | **0, 0, 0** |
 
-Over Cyclone DDS every request sent during a burst waited for the whole burst, because the server's callback ran at
-its own priority 10, below the load. Over rmw_qnx the callback ran at the client's priority in all 600 loaded calls,
-and in every one of the 240 sent mid-burst it finished ahead of the load. Cyclone DDS has fewer mid-burst requests
-because a late client sends its next request late.
+Over both DDS middlewares every request sent during a burst waited for the whole burst, because the server's
+callback ran at its own priority 10, below the load. Over rmw_qnx the callback ran at the client's priority in every
+call, and every request sent mid-burst finished ahead of the load. The DDS rows have fewer mid-burst requests because
+a late client sends its next request late.
 
-The one rmw_qnx miss (run 3 under load) was not a request the load delayed: no loaded rmw_qnx request had the load
-finish first. Its cause is not identified from this run; the scenario log does not record which request it was.
-An earlier single run ([`results/inversion-ros2-20261107-051340.txt`](../results/inversion-ros2-20261107-051340.txt))
-also had one such miss; Cyclone DDS had 40 in its earlier run
-([`results/inversion-ros2-20261107-043659.txt`](../results/inversion-ros2-20261107-043659.txt)).
+**Every recorded loaded run**, all with the same scenario and 200 requests:
 
-**From the kernel's trace** ([`results/trace-ros2-20261107-053447/`](../results/trace-ros2-20261107-053447)): one
-loaded run of 100 requests per middleware under `tracelogger` on the instrumented kernel, decoded on the host with the
-SDP's `traceprinter` and summarised by thread:
+| Middleware | Runs | Deadline misses | Loaded calls where the load finished first | Files |
+|---|---|---|---|---|
+| Fast DDS | 3 | 120 of 600 | 120 of 120 sent mid-burst | `inversion-ros2-20261107-063223` |
+| Cyclone DDS | 7 | 280 of 1400 | 280 of 280 sent mid-burst | `-043659`, `-053325`, `-063223` |
+| rmw_qnx | 8 | **3 of 1600** | **0 of 640** sent mid-burst | `-051340`, `-053325`, `-060819`, `-063223` |
+
+The three rmw_qnx misses (one each in `-051340`, `-053325` run 3, and `-060819`) were not requests the load delayed:
+in no loaded rmw_qnx run did the load finish first. Their cause is not identified; the scenario log does not record
+which request missed.
+
+**From the kernel's trace** ([`results/trace-ros2-20261107-063419/`](../results/trace-ros2-20261107-063419)): one
+loaded run of 100 requests per middleware under `tracelogger` on the instrumented kernel, decoded on the host with
+the SDP's `traceprinter` and summarised by thread:
 
 ```
-wsl: scripts/trace_decode.sh results/trace-ros2-20261107-053447
-python scripts/trace_summary.py results/trace-ros2-20261107-053447/<rmw>.trace results/trace-ros2-20261107-053447/<rmw>.pinv --threads
+wsl: scripts/trace_decode.sh results/trace-ros2-20261107-063419
+python scripts/trace_summary.py results/trace-ros2-20261107-063419/<rmw>.trace results/trace-ros2-20261107-063419/<rmw>.pinv --threads
 ```
 
 ```
-rmw_cyclonedds_cpp: request waits 163; load held CPU 0 for more than 1 ms before the server's thread ran 21; longest 12.9 ms; server's thread ran at priority {10: 344}
-rmw_qnx: request waits 105; load held CPU 0 for more than 1 ms before the server's thread ran 0; longest 0.1 ms; server's thread ran at priority {10: 4, 20: 172}
+rmw_fastrtps_cpp: request waits 186; load held CPU 0 for more than 1 ms before the server's thread ran 21; longest 34.8 ms; server's thread ran at priority {10: 452, 20: 103}
+rmw_cyclonedds_cpp: request waits 179; load held CPU 0 for more than 1 ms before the server's thread ran 21; longest 13.0 ms; server's thread ran at priority {10: 364}
+rmw_qnx: request waits 105; load held CPU 0 for more than 1 ms before the server's thread ran 0; longest 0.1 ms; server's thread ran at priority {10: 4, 20: 155}
 ```
 
 A request wait is an interval in which the client's calling thread was off CPU 0 and the server's executor thread
-ran. In the kernel's record, the load ran first and held CPU 0 for up to 12.9 ms in 21 Cyclone DDS waits; over
-rmw_qnx it never held the CPU longer than 0.1 ms before the server's thread ran, and the server's thread ran at
-priority 20 in 172 of its 176 scheduling events (the 4 at priority 10 are its start-up, before the first request).
-The traced runs' own logs agree: 20 Cyclone DDS requests where the load finished first, 0 for rmw_qnx.
+ran. In the kernel's record the load ran first, and held CPU 0 for more than 1 ms before the server's thread ran, in
+21 waits on each DDS middleware and in none on rmw_qnx. Over rmw_qnx the server's thread ran at priority 20 in 155 of
+its 159 scheduling events; the 4 at priority 10 are its start-up, before the first request. Over Fast DDS the
+server's thread also ran at 20 in 103 of 555 events; the trace does not say what raised it (it was not enough to
+keep the load from running first in 21 waits). The traced runs' own logs agree: 20 requests where the load finished
+first on each DDS middleware, 0 on rmw_qnx.
 
-Fast DDS is not in this comparison: it is not built yet.
-
-**After topics were added to rmw_qnx**, one more rmw_qnx run (`bash scripts/inversion_ros2.sh run 200 rmw_qnx`,
-[`results/inversion-ros2-20261107-060819.txt`](../results/inversion-ros2-20261107-060819.txt)): no load, 0 misses;
-under load, 1 miss of 200, the callback at priority 20 for 200 of 200, and the load finishing first in 0 of 80
-mid-burst requests. That makes 2 misses in 800 loaded rmw_qnx calls across all recorded runs, none of them a request
-the load delayed, against 160 in 800 for Cyclone DDS (four runs of 200, all where the load finished first).
+An earlier trace with two middlewares ([`results/trace-ros2-20261107-053447/`](../results/trace-ros2-20261107-053447))
+gave the same picture: 21 Cyclone DDS waits, 0 rmw_qnx waits.
 
 ## 1b. Topics through rmw_qnx
 
@@ -95,6 +102,34 @@ CHATTER received=20 last=[hello 20] publishers_matched=1
 
 20 of 20 received, in order. (`subscribers_matched=0` is read after the listener had received its 20 and left.) The
 same check on Cyclone DDS in that session did not run: ssh to the guest timed out during its banner exchange.
+
+## 1c. `/dev/ros2`
+
+**Command**: `bash scripts/inversion_ros2.sh up`, then `bash scripts/dev_ros2_demo.sh`. It starts `ros2graphd`
+([`rmw_qnx/src/ros2graphd.cpp`](../rmw_qnx/src/ros2graphd.cpp)), a talker, a listener and a service server, then
+runs `ls` and `cat` on `/dev/ros2`. The recorded session is [`docs/dev_ros2_session.txt`](dev_ros2_session.txt).
+
+## 1d. pendulum_control, unchanged
+
+**Command**: `bash scripts/pendulum_run.sh 2000 rmw_qnx rmw_cyclonedds_cpp`
+([`results/pendulum-20261107-062433.txt`](../results/pendulum-20261107-062433.txt)). ROS 2's own `pendulum_demo`
+from [ros2/demos](https://github.com/ros2/demos) (Jazzy), built from its source with no change, run with `-i 2000`:
+
+```
+## RMW_IMPLEMENTATION=rmw_qnx pendulum_demo -i 2000
+PendulumMotor received 998 messages
+PendulumController received 998 messages
+exit=0
+## RMW_IMPLEMENTATION=rmw_cyclonedds_cpp pendulum_demo -i 2000
+PendulumMotor received 989 messages
+PendulumController received 990 messages
+exit=0
+```
+
+Its dependency `rttest` needed one change for QNX ([`qnx/ros2/patches/rttest-rusage.patch`](../qnx/ros2/patches/rttest-rusage.patch)):
+QNX has no `RUSAGE_THREAD`, so rttest counts page faults for the whole process. In this guest rttest also reports
+`mallopt for mmap failed` and `Couldn't lock all cached virtual memory`, and goes on. The demo's latency statistics
+are in the result file as raw output; they are not claims.
 
 ## 2. The same property at the transport level
 
