@@ -8,6 +8,6 @@ S="$REPO/scripts/inversion_ros2.sh"
 bash "$REPO/qnx/boot.sh" || exit 1
 bash "$REPO/qnx/g.sh" 'rm -rf /data/ros2 /tmp/rmwqnx; echo "removed /data/ros2"' </dev/null
 bash "$S" up || exit 1
-REPEAT=3 bash "$S" run 200 rmw_cyclonedds_cpp rmw_qnx
-bash "$S" trace 100 rmw_cyclonedds_cpp rmw_qnx
+REPEAT=3 bash "$S" run 200 rmw_fastrtps_cpp rmw_cyclonedds_cpp rmw_qnx
+bash "$S" trace 100 rmw_fastrtps_cpp rmw_cyclonedds_cpp rmw_qnx
 bash "$S" down

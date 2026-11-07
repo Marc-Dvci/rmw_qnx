@@ -7,8 +7,8 @@ WORK="${1:-$HOME/rmw_qnx-work}"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 ROS="$WORK/build-files/ports/ros2/ros2-jazzy"
 source "$HOME/qnx800/qnxsdp-env.sh" >/dev/null
-# Middlewares not built here are left out of colcon's graph (set RMWQNX_SKIP=" " once Fast DDS is built).
-RMWQNX_SKIP="${RMWQNX_SKIP-fastrtps fastrtps_cmake_module rmw_fastrtps_cpp rmw_fastrtps_shared_cpp rmw_fastrtps_dynamic_cpp rosidl_dynamic_typesupport_fastrtps rmw_connextdds rmw_connextdds_common rti_connext_dds_cmake_module rmw_connextddsmicro}"
+# Middlewares not built here are left out of colcon's graph (Connext needs RTI's SDK; the dynamic Fast DDS variant is not used).
+RMWQNX_SKIP="${RMWQNX_SKIP-rmw_fastrtps_dynamic_cpp rmw_connextdds rmw_connextdds_common rti_connext_dds_cmake_module rmw_connextddsmicro}"
 . "$WORK/venv/bin/activate"
 mkdir -p "$ROS/src/rmwqnx"
 ln -sfn "$REPO/rmw_qnx" "$ROS/src/rmwqnx/rmw_qnx"
