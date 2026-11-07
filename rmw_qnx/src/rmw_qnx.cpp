@@ -50,12 +50,14 @@
 #include "rmw/get_topic_names_and_types.h"
 #include "rmw/impl/cpp/macros.hpp"
 #include "rmw/rmw.h"
+#include "rmw/serialized_message.h"
 #include "rmw/validate_namespace.h"
 #include "rmw/validate_node_name.h"
 #include "rosidl_runtime_c/service_type_support_struct.h"
 #include "rosidl_typesupport_introspection_cpp/identifier.hpp"
 #include "rosidl_typesupport_introspection_cpp/service_introspection.hpp"
 #include "serdes.hpp"
+#include "topics.hpp"
 
 namespace its = rosidl_typesupport_introspection_cpp;
 using rmw_qnx::core::CdrReader;
@@ -129,18 +131,61 @@ struct ServiceImpl;
 
 }  // namespace
 
+struct SubscriptionImpl;
+
 struct rmw_context_impl_s {
   int chid = -1;
   int self_coid = -1;
   std::string dir;  // service registry of this domain
+  size_t domain = 0;
   std::mutex mu;
   std::map<uint32_t, ServiceImpl *> services;
   uint32_t next_service = 1;
   std::atomic<uint64_t> next_gid{1};
+  // Topic pulses from publishers in any process arrive on topic_chid. The relay thread takes each pulse's priority
+  // (the subscriber's), marks the subscription and wakes whatever waits on it.
+  int topic_chid = -1, topic_coid = -1;
+  std::thread relay;
+  std::map<uint32_t, SubscriptionImpl *> subs;
+  uint32_t next_sub = 1;
   bool shutdown = false;
 };
 
+struct SubscriptionImpl {
+  rmw_context_impl_s *ctx = nullptr;
+  uint32_t id = 0;
+  std::string topic_name;
+  std::unique_ptr<rmw_qnx::Topic> topic;  // null for types without C++ introspection: nothing is carried
+  int slot = -1;
+  const its::MessageMembers *members = nullptr;
+  rmw_qos_profile_t qos{};
+  uint8_t gid[RMW_GID_STORAGE_SIZE] = {};
+  std::mutex mu;
+  uint64_t pos = 0;  // next ring sequence this subscription takes
+  Waitable w;
+  bool has_data() {
+    if (!topic) return false;
+    std::lock_guard<std::mutex> l(mu);
+    return topic->ring().head() > pos;
+  }
+};
+
 namespace {
+
+constexpr int kPulseTopic = _PULSE_CODE_MINAVAIL + 3;
+
+void relay_main(rmw_context_impl_s *ctx) {
+  for (;;) {
+    _pulse p;
+    if (MsgReceivePulse(ctx->topic_chid, &p, sizeof p, nullptr) == -1) continue;
+    if (p.code == kPulseQuit) return;
+    if (p.code != kPulseTopic) continue;
+    // This thread now runs at the priority the subscriber registered with.
+    std::lock_guard<std::mutex> l(ctx->mu);
+    auto it = ctx->subs.find(uint32_t(p.value.sival_int));
+    if (it != ctx->subs.end()) it->second->w.notify();
+  }
+}
 
 void make_gid(rmw_context_impl_s *ctx, uint8_t *gid) {
   std::memset(gid, 0, RMW_GID_STORAGE_SIZE);
@@ -492,13 +537,21 @@ rmw_ret_t rmw_init(const rmw_init_options_t *o, rmw_context_t *ctx) {
   impl->self_coid = ConnectAttach(0, 0, impl->chid, _NTO_SIDE_CHANNEL, 0);
   const size_t domain = o->domain_id == RMW_DEFAULT_DOMAIN_ID ? 0 : o->domain_id;
   impl->dir = "/tmp/rmwqnx/d" + std::to_string(domain) + "/services";
+  impl->domain = domain;
   mkdirs(impl->dir);
+  impl->topic_chid = ChannelCreate(0);
+  impl->topic_coid = ConnectAttach(0, 0, impl->topic_chid, _NTO_SIDE_CHANNEL, 0);
+  impl->relay = std::thread(relay_main, impl.get());
   ctx->instance_id = o->instance_id;
   ctx->implementation_identifier = kId;
   ctx->actual_domain_id = domain;
   ctx->options = rmw_get_zero_initialized_init_options();
   rmw_ret_t r = rmw_init_options_copy(o, &ctx->options);
   if (r != RMW_RET_OK) {
+    MsgSendPulse(impl->topic_coid, -1, kPulseQuit, 0);
+    impl->relay.join();
+    ConnectDetach(impl->topic_coid);
+    ChannelDestroy(impl->topic_chid);
     ConnectDetach(impl->self_coid);
     ChannelDestroy(impl->chid);
     *ctx = rmw_get_zero_initialized_context();
@@ -522,6 +575,10 @@ rmw_ret_t rmw_context_fini(rmw_context_t *ctx) {
     RMW_SET_ERROR_MSG("context has not been shutdown");
     return RMW_RET_INVALID_ARGUMENT;
   }
+  MsgSendPulse(ctx->impl->topic_coid, -1, kPulseQuit, 0);
+  ctx->impl->relay.join();
+  ConnectDetach(ctx->impl->topic_coid);
+  ChannelDestroy(ctx->impl->topic_chid);
   ConnectDetach(ctx->impl->self_coid);
   ChannelDestroy(ctx->impl->chid);
   delete ctx->impl;
@@ -654,6 +711,9 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
       for (size_t i = 0; i < srvs->service_count; i++) fn(static_cast<ServiceImpl *>(srvs->services[i])->w);
     if (clis)
       for (size_t i = 0; i < clis->client_count; i++) fn(static_cast<ClientImpl *>(clis->clients[i])->w);
+    if (subs)
+      for (size_t i = 0; i < subs->subscriber_count; i++)
+        fn(static_cast<SubscriptionImpl *>(subs->subscribers[i])->w);
   };
   // Register before checking, so a trigger between the check and the receive still wakes this wait.
   const int prio = assigned_priority();
@@ -676,6 +736,9 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
         std::lock_guard<std::mutex> l(c->mu);
         any |= !c->responses.empty();
       }
+    if (subs)
+      for (size_t i = 0; i < subs->subscriber_count; i++)
+        any |= static_cast<SubscriptionImpl *>(subs->subscribers[i])->has_data();
     return any;
   };
 
@@ -731,7 +794,8 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
       if (c->responses.empty()) clis->clients[i] = nullptr;
     }
   if (subs)
-    for (size_t i = 0; i < subs->subscriber_count; i++) subs->subscribers[i] = nullptr;
+    for (size_t i = 0; i < subs->subscriber_count; i++)
+      if (!static_cast<SubscriptionImpl *>(subs->subscribers[i])->has_data()) subs->subscribers[i] = nullptr;
   if (evs)
     for (size_t i = 0; i < evs->event_count; i++) evs->events[i] = nullptr;
   return timed_out ? RMW_RET_TIMEOUT : RMW_RET_OK;
@@ -1044,17 +1108,13 @@ rmw_ret_t rmw_init_publisher_allocation(const rosidl_message_type_support_t *,
   return unsupported("publisher allocation");
 }
 rmw_ret_t rmw_fini_publisher_allocation(rmw_publisher_allocation_t *) { return unsupported("publisher allocation"); }
-// Topic endpoints, first step: they can be created, report their QoS and gid, and are counted as unmatched, but
-// carry no data yet (publish drops, take finds nothing). rclcpp creates some on every node (its time source
-// subscribes to /parameter_events), so a service-only application needs them to exist. Delivery over the
-// shared-memory ring (core/ring.hpp) is the next step.
-struct TopicEndpoint {
-  std::string topic;
-  rmw_qos_profile_t qos;
-  uint8_t gid[RMW_GID_STORAGE_SIZE];
-};
+// ---- topics ----
+//
+// A publisher serialises once into the topic's ring and pulses each subscriber at the priority it registered with
+// (topics.hpp). The subscriber's context relay thread takes that pulse at that priority and wakes the wait set.
+// Types offered only with the C type support (rcl's /rosout) are created and counted, but carry no data yet.
 
-rmw_qos_profile_t resolve(const rmw_qos_profile_t &q) {
+static rmw_qos_profile_t resolve(const rmw_qos_profile_t &q) {
   rmw_qos_profile_t r = q;
   if (r.history == RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT) r.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
   if (r.depth == 0 && r.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST) r.depth = 10;
@@ -1062,6 +1122,38 @@ rmw_qos_profile_t resolve(const rmw_qos_profile_t &q) {
   if (r.durability == RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT) r.durability = RMW_QOS_POLICY_DURABILITY_VOLATILE;
   if (r.liveliness == RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT) r.liveliness = RMW_QOS_POLICY_LIVELINESS_AUTOMATIC;
   return r;
+}
+
+struct PublisherImpl {
+  std::unique_ptr<rmw_qnx::Topic> topic;
+  const its::MessageMembers *members = nullptr;
+  rmw_qos_profile_t qos{};
+  uint8_t gid[RMW_GID_STORAGE_SIZE] = {};
+  std::atomic<uint64_t> seq{1};
+};
+
+// The C++ introspection members of a message type, or nullptr if it has none.
+static const its::MessageMembers *message_members(const rosidl_message_type_support_t *ts) {
+  const rosidl_message_type_support_t *h = get_message_typesupport_handle(ts, its::typesupport_identifier);
+  rmw_reset_error();
+  return h ? static_cast<const its::MessageMembers *>(h->data) : nullptr;
+}
+
+static std::string type_name(const its::MessageMembers *m) {
+  std::string ns = m->message_namespace_;
+  for (size_t i; (i = ns.find("::")) != std::string::npos;) ns.replace(i, 2, "/");
+  return ns + "/" + m->message_name_;
+}
+
+static std::unique_ptr<rmw_qnx::Topic> open_topic(rmw_context_impl_s *ctx, const char *name,
+                                           const its::MessageMembers *m) {
+  if (!m) return nullptr;
+  auto t = std::make_unique<rmw_qnx::Topic>(ctx->domain, name, type_name(m));
+  if (!t->error().empty()) {
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING("rmw_qnx: %s", t->error().c_str());
+    return nullptr;
+  }
+  return t;
 }
 
 rmw_publisher_t *rmw_create_publisher(const rmw_node_t *node, const rosidl_message_type_support_t *ts,
@@ -1073,11 +1165,16 @@ rmw_publisher_t *rmw_create_publisher(const rmw_node_t *node, const rosidl_messa
   RMW_CHECK_ARGUMENT_FOR_NULL(name, nullptr);
   RMW_CHECK_ARGUMENT_FOR_NULL(qos, nullptr);
   RMW_CHECK_ARGUMENT_FOR_NULL(opts, nullptr);
-  auto *e = new TopicEndpoint{name, resolve(*qos), {}};
+  auto e = std::make_unique<PublisherImpl>();
+  e->members = message_members(ts);
+  e->topic = open_topic(node->context->impl, name, e->members);
+  if (e->members && !e->topic) return nullptr;
+  if (e->topic) e->topic->add_publisher();
+  e->qos = resolve(*qos);
   make_gid(node->context->impl, e->gid);
   rmw_publisher_t *p = rmw_publisher_allocate();
   p->implementation_identifier = kId;
-  p->data = e;
+  p->data = e.release();
   p->topic_name = rcutils_strdup(name, rcutils_get_default_allocator());
   p->options = *opts;
   p->can_loan_messages = false;
@@ -1086,7 +1183,9 @@ rmw_publisher_t *rmw_create_publisher(const rmw_node_t *node, const rosidl_messa
 rmw_ret_t rmw_destroy_publisher(rmw_node_t *node, rmw_publisher_t *p) {
   CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
   CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
-  delete static_cast<TopicEndpoint *>(p->data);
+  auto *e = static_cast<PublisherImpl *>(p->data);
+  if (e->topic) e->topic->remove_publisher();
+  delete e;
   rcutils_allocator_t a = rcutils_get_default_allocator();
   a.deallocate(const_cast<char *>(p->topic_name), a.state);
   rmw_publisher_free(p);
@@ -1098,10 +1197,32 @@ rmw_ret_t rmw_borrow_loaned_message(const rmw_publisher_t *, const rosidl_messag
 rmw_ret_t rmw_return_loaned_message_from_publisher(const rmw_publisher_t *, void *) {
   return unsupported("loaned messages");
 }
+static rmw_ret_t publish_cdr(PublisherImpl *e, const uint8_t *cdr, size_t len) {
+  if (!e->topic) return RMW_RET_OK;  // C type support only: not carried yet
+  if (!e->topic->publish(e->gid, e->seq.fetch_add(1), cdr, len, kPulseTopic)) {
+    RMW_SET_ERROR_MSG("rmw_qnx: message larger than a topic slot (16 KiB)");
+    return RMW_RET_ERROR;
+  }
+  return RMW_RET_OK;
+}
 rmw_ret_t rmw_publish(const rmw_publisher_t *p, const void *msg, rmw_publisher_allocation_t *) {
   CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
   RMW_CHECK_ARGUMENT_FOR_NULL(msg, RMW_RET_INVALID_ARGUMENT);
-  return RMW_RET_OK;  // no subscriber can match yet
+  auto *e = static_cast<PublisherImpl *>(p->data);
+  if (!e->topic) return RMW_RET_OK;
+  static thread_local std::vector<uint8_t> body;
+  CdrWriter w(&body);
+  if (!rmw_qnx::serialize_cpp(e->members, msg, w)) {
+    RMW_SET_ERROR_MSG("rmw_qnx: message could not be serialised");
+    return RMW_RET_ERROR;
+  }
+  return publish_cdr(e, body.data(), body.size());
+}
+rmw_ret_t rmw_publish_serialized_message(const rmw_publisher_t *p, const rmw_serialized_message_t *m,
+                                         rmw_publisher_allocation_t *) {
+  CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(m, RMW_RET_INVALID_ARGUMENT);
+  return publish_cdr(static_cast<PublisherImpl *>(p->data), m->buffer, m->buffer_length);
 }
 rmw_ret_t rmw_publish_loaned_message(const rmw_publisher_t *, void *, rmw_publisher_allocation_t *) {
   return unsupported("loaned messages");
@@ -1109,21 +1230,160 @@ rmw_ret_t rmw_publish_loaned_message(const rmw_publisher_t *, void *, rmw_publis
 rmw_ret_t rmw_publisher_count_matched_subscriptions(const rmw_publisher_t *p, size_t *n) {
   CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
   RMW_CHECK_ARGUMENT_FOR_NULL(n, RMW_RET_INVALID_ARGUMENT);
-  *n = 0;
+  auto *e = static_cast<PublisherImpl *>(p->data);
+  *n = e->topic ? e->topic->subscribers() : 0;
   return RMW_RET_OK;
 }
 rmw_ret_t rmw_publisher_get_actual_qos(const rmw_publisher_t *p, rmw_qos_profile_t *qos) {
   CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
   RMW_CHECK_ARGUMENT_FOR_NULL(qos, RMW_RET_INVALID_ARGUMENT);
-  *qos = static_cast<TopicEndpoint *>(p->data)->qos;
+  *qos = static_cast<PublisherImpl *>(p->data)->qos;
+  return RMW_RET_OK;
+}
+rmw_ret_t rmw_get_gid_for_publisher(const rmw_publisher_t *p, rmw_gid_t *gid) {
+  CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(gid, RMW_RET_INVALID_ARGUMENT);
+  gid->implementation_identifier = kId;
+  std::memcpy(gid->data, static_cast<PublisherImpl *>(p->data)->gid, RMW_GID_STORAGE_SIZE);
+  return RMW_RET_OK;
+}
+
+rmw_subscription_t *rmw_create_subscription(const rmw_node_t *node, const rosidl_message_type_support_t *ts,
+                                            const char *name, const rmw_qos_profile_t *qos,
+                                            const rmw_subscription_options_t *opts) {
+  RMW_CHECK_ARGUMENT_FOR_NULL(node, nullptr);
+  RMW_CHECK_TYPE_IDENTIFIERS_MATCH(node, node->implementation_identifier, kId, return nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(ts, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(name, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(qos, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(opts, nullptr);
+  rmw_context_impl_s *ctx = node->context->impl;
+  auto *s = new SubscriptionImpl();
+  s->ctx = ctx;
+  s->topic_name = name;
+  s->members = message_members(ts);
+  s->topic = open_topic(ctx, name, s->members);
+  if (s->members && !s->topic) {
+    delete s;
+    return nullptr;
+  }
+  s->qos = resolve(*qos);
+  make_gid(ctx, s->gid);
+  {
+    std::lock_guard<std::mutex> l(ctx->mu);
+    s->id = ctx->next_sub++;
+    ctx->subs[s->id] = s;
+  }
+  if (s->topic) {
+    s->pos = s->qos.durability == RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL
+                 ? s->topic->ring().reader_start_with_history(uint32_t(s->qos.depth))
+                 : s->topic->ring().reader_start_now();
+    // Woken at the priority of the thread that creates the subscription.
+    s->slot = s->topic->add_subscriber(ctx->topic_chid, s->id, assigned_priority());
+  }
+  rmw_subscription_t *sub = rmw_subscription_allocate();
+  sub->implementation_identifier = kId;
+  sub->data = s;
+  sub->topic_name = rcutils_strdup(name, rcutils_get_default_allocator());
+  sub->options = *opts;
+  sub->can_loan_messages = false;
+  sub->is_cft_enabled = false;
+  return sub;
+}
+rmw_ret_t rmw_destroy_subscription(rmw_node_t *node, rmw_subscription_t *sub) {
+  CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
+  CHECK_ID(sub, RMW_RET_INVALID_ARGUMENT);
+  auto *s = static_cast<SubscriptionImpl *>(sub->data);
+  if (s->topic) s->topic->remove_subscriber(s->slot);
+  {
+    std::lock_guard<std::mutex> l(s->ctx->mu);
+    s->ctx->subs.erase(s->id);
+  }
+  delete s;
+  rcutils_allocator_t a = rcutils_get_default_allocator();
+  a.deallocate(const_cast<char *>(sub->topic_name), a.state);
+  rmw_subscription_free(sub);
+  return RMW_RET_OK;
+}
+rmw_ret_t rmw_subscription_count_matched_publishers(const rmw_subscription_t *sub, size_t *n) {
+  CHECK_ID(sub, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(n, RMW_RET_INVALID_ARGUMENT);
+  auto *s = static_cast<SubscriptionImpl *>(sub->data);
+  *n = s->topic ? s->topic->publishers() : 0;
+  return RMW_RET_OK;
+}
+rmw_ret_t rmw_subscription_get_actual_qos(const rmw_subscription_t *sub, rmw_qos_profile_t *qos) {
+  CHECK_ID(sub, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(qos, RMW_RET_INVALID_ARGUMENT);
+  *qos = static_cast<SubscriptionImpl *>(sub->data)->qos;
+  return RMW_RET_OK;
+}
+
+// Takes the next message's bytes (after the prefix) into *out. KEEP_LAST: a backlog deeper than the depth is
+// skipped to the last `depth` messages.
+static bool take_bytes(SubscriptionImpl *s, std::vector<uint8_t> *out, rmw_message_info_t *info) {
+  if (!s->topic) return false;
+  rmw_qnx::core::Ring &r = s->topic->ring();
+  std::lock_guard<std::mutex> l(s->mu);
+  const uint64_t head = r.head();
+  if (s->qos.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST && s->qos.depth > 0 && head > s->pos + s->qos.depth)
+    s->pos = head - s->qos.depth;
+  out->resize(r.payload());
+  for (int tries = 0; tries < 1000; tries++) {
+    rmw_qnx::core::TakeResult t = r.take(&s->pos, out->data(), uint32_t(out->size()));
+    if (t.status == rmw_qnx::core::TakeStatus::kEmpty) return false;
+    if (t.status != rmw_qnx::core::TakeStatus::kOk || t.length < rmw_qnx::kPrefix) continue;
+    if (info) {
+      *info = rmw_get_zero_initialized_message_info();
+      info->source_timestamp = int64_t(t.stamp_ns);
+      info->received_timestamp = now_ns();
+      std::memcpy(&info->publication_sequence_number, out->data() + 16, 8);
+      info->reception_sequence_number = int64_t(t.seq);
+      info->publisher_gid.implementation_identifier = kId;
+      std::memcpy(info->publisher_gid.data, out->data(), RMW_GID_STORAGE_SIZE);
+      info->from_intra_process = false;
+    }
+    out->erase(out->begin(), out->begin() + rmw_qnx::kPrefix);
+    out->resize(t.length - rmw_qnx::kPrefix);
+    return true;
+  }
+  return false;
+}
+
+static rmw_ret_t take_into(const rmw_subscription_t *sub, void *msg, bool *taken, rmw_message_info_t *info) {
+  CHECK_ID(sub, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(msg, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
+  auto *s = static_cast<SubscriptionImpl *>(sub->data);
+  *taken = false;
+  static thread_local std::vector<uint8_t> bytes;
+  if (!take_bytes(s, &bytes, info)) return RMW_RET_OK;
+  CdrReader r(bytes.data(), bytes.size());
+  if (!r.ok() || !rmw_qnx::deserialize_cpp(s->members, msg, r)) {
+    RMW_SET_ERROR_MSG("rmw_qnx: malformed message");
+    return RMW_RET_ERROR;
+  }
+  *taken = true;
+  return RMW_RET_OK;
+}
+
+static rmw_ret_t take_serialized(const rmw_subscription_t *sub, rmw_serialized_message_t *m, bool *taken,
+                          rmw_message_info_t *info) {
+  CHECK_ID(sub, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(m, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
+  *taken = false;
+  static thread_local std::vector<uint8_t> bytes;
+  if (!take_bytes(static_cast<SubscriptionImpl *>(sub->data), &bytes, info)) return RMW_RET_OK;
+  if (m->buffer_capacity < bytes.size() && rmw_serialized_message_resize(m, bytes.size()) != RMW_RET_OK)
+    return RMW_RET_BAD_ALLOC;
+  std::memcpy(m->buffer, bytes.data(), bytes.size());
+  m->buffer_length = bytes.size();
+  *taken = true;
   return RMW_RET_OK;
 }
 rmw_ret_t rmw_publisher_event_init(rmw_event_t *, const rmw_publisher_t *, rmw_event_type_t) {
   return unsupported("events");
-}
-rmw_ret_t rmw_publish_serialized_message(const rmw_publisher_t *, const rmw_serialized_message_t *,
-                                         rmw_publisher_allocation_t *) {
-  return unsupported("topics");
 }
 rmw_ret_t rmw_publisher_assert_liveliness(const rmw_publisher_t *) { return unsupported("liveliness"); }
 rmw_ret_t rmw_publisher_wait_for_all_acked(const rmw_publisher_t *, rmw_time_t) { return unsupported("topics"); }
@@ -1144,47 +1404,6 @@ rmw_ret_t rmw_init_subscription_allocation(const rosidl_message_type_support_t *
 rmw_ret_t rmw_fini_subscription_allocation(rmw_subscription_allocation_t *) {
   return unsupported("subscription allocation");
 }
-rmw_subscription_t *rmw_create_subscription(const rmw_node_t *node, const rosidl_message_type_support_t *ts,
-                                            const char *name, const rmw_qos_profile_t *qos,
-                                            const rmw_subscription_options_t *opts) {
-  RMW_CHECK_ARGUMENT_FOR_NULL(node, nullptr);
-  RMW_CHECK_TYPE_IDENTIFIERS_MATCH(node, node->implementation_identifier, kId, return nullptr);
-  RMW_CHECK_ARGUMENT_FOR_NULL(ts, nullptr);
-  RMW_CHECK_ARGUMENT_FOR_NULL(name, nullptr);
-  RMW_CHECK_ARGUMENT_FOR_NULL(qos, nullptr);
-  RMW_CHECK_ARGUMENT_FOR_NULL(opts, nullptr);
-  auto *e = new TopicEndpoint{name, resolve(*qos), {}};
-  make_gid(node->context->impl, e->gid);
-  rmw_subscription_t *s = rmw_subscription_allocate();
-  s->implementation_identifier = kId;
-  s->data = e;
-  s->topic_name = rcutils_strdup(name, rcutils_get_default_allocator());
-  s->options = *opts;
-  s->can_loan_messages = false;
-  s->is_cft_enabled = false;
-  return s;
-}
-rmw_ret_t rmw_destroy_subscription(rmw_node_t *node, rmw_subscription_t *s) {
-  CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
-  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
-  delete static_cast<TopicEndpoint *>(s->data);
-  rcutils_allocator_t a = rcutils_get_default_allocator();
-  a.deallocate(const_cast<char *>(s->topic_name), a.state);
-  rmw_subscription_free(s);
-  return RMW_RET_OK;
-}
-rmw_ret_t rmw_subscription_count_matched_publishers(const rmw_subscription_t *s, size_t *n) {
-  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
-  RMW_CHECK_ARGUMENT_FOR_NULL(n, RMW_RET_INVALID_ARGUMENT);
-  *n = 0;
-  return RMW_RET_OK;
-}
-rmw_ret_t rmw_subscription_get_actual_qos(const rmw_subscription_t *s, rmw_qos_profile_t *qos) {
-  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
-  RMW_CHECK_ARGUMENT_FOR_NULL(qos, RMW_RET_INVALID_ARGUMENT);
-  *qos = static_cast<TopicEndpoint *>(s->data)->qos;
-  return RMW_RET_OK;
-}
 rmw_ret_t rmw_subscription_event_init(rmw_event_t *, const rmw_subscription_t *, rmw_event_type_t) {
   return unsupported("events");
 }
@@ -1195,29 +1414,26 @@ rmw_ret_t rmw_subscription_get_content_filter(const rmw_subscription_t *, rcutil
                                               rmw_subscription_content_filter_options_t *) {
   return unsupported("content filters");
 }
-rmw_ret_t rmw_take(const rmw_subscription_t *s, void *, bool *taken, rmw_subscription_allocation_t *) {
-  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
-  RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
-  *taken = false;
-  return RMW_RET_OK;
+rmw_ret_t rmw_take(const rmw_subscription_t *sub, void *msg, bool *taken, rmw_subscription_allocation_t *) {
+  return take_into(sub, msg, taken, nullptr);
 }
-rmw_ret_t rmw_take_with_info(const rmw_subscription_t *s, void *, bool *taken, rmw_message_info_t *,
+rmw_ret_t rmw_take_with_info(const rmw_subscription_t *sub, void *msg, bool *taken, rmw_message_info_t *info,
                              rmw_subscription_allocation_t *) {
-  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
-  RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
-  *taken = false;
-  return RMW_RET_OK;
+  RMW_CHECK_ARGUMENT_FOR_NULL(info, RMW_RET_INVALID_ARGUMENT);
+  return take_into(sub, msg, taken, info);
+}
+rmw_ret_t rmw_take_serialized_message(const rmw_subscription_t *sub, rmw_serialized_message_t *m, bool *taken,
+                                      rmw_subscription_allocation_t *) {
+  return take_serialized(sub, m, taken, nullptr);
+}
+rmw_ret_t rmw_take_serialized_message_with_info(const rmw_subscription_t *sub, rmw_serialized_message_t *m,
+                                                bool *taken, rmw_message_info_t *info,
+                                                rmw_subscription_allocation_t *) {
+  RMW_CHECK_ARGUMENT_FOR_NULL(info, RMW_RET_INVALID_ARGUMENT);
+  return take_serialized(sub, m, taken, info);
 }
 rmw_ret_t rmw_take_sequence(const rmw_subscription_t *, size_t, rmw_message_sequence_t *,
                             rmw_message_info_sequence_t *, size_t *, rmw_subscription_allocation_t *) {
-  return unsupported("topics");
-}
-rmw_ret_t rmw_take_serialized_message(const rmw_subscription_t *, rmw_serialized_message_t *, bool *,
-                                      rmw_subscription_allocation_t *) {
-  return unsupported("topics");
-}
-rmw_ret_t rmw_take_serialized_message_with_info(const rmw_subscription_t *, rmw_serialized_message_t *, bool *,
-                                                rmw_message_info_t *, rmw_subscription_allocation_t *) {
   return unsupported("topics");
 }
 rmw_ret_t rmw_take_loaned_message(const rmw_subscription_t *, void **, bool *, rmw_subscription_allocation_t *) {
@@ -1265,13 +1481,6 @@ rmw_ret_t rmw_count_publishers(const rmw_node_t *, const char *, size_t *) { ret
 rmw_ret_t rmw_count_subscribers(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
 rmw_ret_t rmw_count_clients(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
 rmw_ret_t rmw_count_services(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
-rmw_ret_t rmw_get_gid_for_publisher(const rmw_publisher_t *p, rmw_gid_t *gid) {
-  CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
-  RMW_CHECK_ARGUMENT_FOR_NULL(gid, RMW_RET_INVALID_ARGUMENT);
-  gid->implementation_identifier = kId;
-  std::memcpy(gid->data, static_cast<TopicEndpoint *>(p->data)->gid, RMW_GID_STORAGE_SIZE);
-  return RMW_RET_OK;
-}
 rmw_ret_t rmw_set_log_severity(rmw_log_severity_t) { return RMW_RET_OK; }
 rmw_ret_t rmw_get_publishers_info_by_topic(const rmw_node_t *, rcutils_allocator_t *, const char *, bool,
                                            rmw_topic_endpoint_info_array_t *) {

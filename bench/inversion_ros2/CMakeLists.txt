@@ -13,4 +13,8 @@ add_executable(inversion src/inversion.cpp)
 target_link_libraries(inversion rclcpp::rclcpp ${example_interfaces_TARGETS})
 install(TARGETS inversion DESTINATION lib/${PROJECT_NAME})
 
+add_executable(chatter src/chatter.cpp)
+target_link_libraries(chatter rclcpp::rclcpp ${example_interfaces_TARGETS})
+install(TARGETS chatter DESTINATION lib/${PROJECT_NAME})
+
 ament_package()
