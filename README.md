@@ -130,7 +130,8 @@ compiles on any host, and is tested there.
 - It does not carry messages between machines: message passing and shared memory are local to one QNX system.
 - It carries data for types with the C++ introspection type support. Types offered only with the C type support (rcl's
   own `/rosout`) are created but carry nothing yet.
-- Loaned messages, content filters, security enclaves, QoS events and graph queries return `RMW_RET_UNSUPPORTED`.
+- Loaned messages, content filters, security enclaves and graph queries return `RMW_RET_UNSUPPORTED`; QoS events can
+  be created but are never raised.
 - It makes no timing claim beyond the counts below: the figures come from a virtual machine.
 
 ## Evidence
@@ -140,12 +141,13 @@ All guest figures are QEMU, WHPX, and each has its command in [`docs/RESULTS.md`
 | Claim | Measured | Command | Recorded output | Code | Test |
 |---|---|---|---|---|---|
 | A medium load delays a high-priority ROS 2 client on DDS and not on rmw_qnx | Loaded misses: Fast DDS 40, 40, 40; Cyclone DDS 40, 40, 40; rmw_qnx 0, 0, 0 (of 200) | `bash scripts/killtest_all.sh` | [`inversion-ros2-20261107-063223.txt`](results/inversion-ros2-20261107-063223.txt) | [`rmw_qnx.cpp`](rmw_qnx/src/rmw_qnx.cpp) | the command itself |
-| Across every recorded loaded run, rmw_qnx misses are not caused by the load | rmw_qnx 3 misses in 1,600 calls, load finished first in 0 of 640 mid-burst calls; Cyclone DDS 280 in 1,400; Fast DDS 120 in 600 | as above, repeated | [RESULTS §1](docs/RESULTS.md#1-the-kill-test-priority-inversion-through-ros-2) | | |
+| Across every recorded loaded run, rmw_qnx misses are not caused by the load | rmw_qnx 3 misses in 1,800 calls, load finished first in 0 of 720 mid-burst calls; Cyclone DDS 280 in 1,400; Fast DDS 120 in 600 | as above, repeated | [RESULTS §1](docs/RESULTS.md#1-the-kill-test-priority-inversion-through-ros-2) | | |
 | The server's callback runs at the client's priority | 200 of 200 in every rmw_qnx run; 0 on DDS | same | same | `rmw_wait`, `sender_main` | same |
 | The kernel's trace agrees | Load held CPU 0 for more than 1 ms before the server's thread: 21, 21, 0 waits | `bash scripts/killtest_all.sh`, then `scripts/trace_summary.py --threads` | [`trace-ros2-20261107-063419/`](results/trace-ros2-20261107-063419) | [`trace_summary.py`](scripts/trace_summary.py) | [`tests/tools`](tests/tools/test_trace_summary.py) (11) |
 | The same property holds at the transport level | MsgSend 0 misses; UDP and shared memory 40 of 200 | `bash scripts/pinv_run.sh 200` | [`pinv-20261107-002853.txt`](results/pinv-20261107-002853.txt) | [`pinv.c`](bench/pinv/pinv.c) | |
 | `pendulum_control` runs unchanged | Exit 0; 998 and 998 messages received on rmw_qnx | `bash scripts/pendulum_run.sh 2000` | [`pendulum-20261107-062433.txt`](results/pendulum-20261107-062433.txt) | | |
-| Topics cross processes | 20 of 20 messages, in order | `bash scripts/topics_check.sh 20` | [`topics-20261107-060803.txt`](results/topics-20261107-060803.txt) | [`topics.hpp`](rmw_qnx/src/topics.hpp) | |
+| ROS 2's own `test_rmw_implementation` | rmw_qnx 85 passed, 36 failed (125 run; 1 executable crashed); Cyclone DDS 122 of 126; Fast DDS 126 of 126 | `bash scripts/rmw_suite.sh` | [`test_rmw_implementation-20261107-064622.txt`](results/test_rmw_implementation-20261107-064622.txt) | | the suite itself |
+| Topics cross processes | 20 of 20 messages, in order | `bash scripts/topics_check.sh 20` | [`topics-20261107-064727.txt`](results/topics-20261107-064727.txt) | [`topics.hpp`](rmw_qnx/src/topics.hpp) | |
 | `/dev/ros2` lists the graph and decodes the latest message | Recorded session | `bash scripts/dev_ros2_demo.sh` | [`dev_ros2_session.txt`](docs/dev_ros2_session.txt) | [`ros2graphd.cpp`](rmw_qnx/src/ros2graphd.cpp) | |
 | A reader never takes a torn or repeated message; a lapped reader counts what it lost | Property tests over random interleavings and a racing writer | `scripts/host_tests.sh` | CI | [`core/ring.hpp`](rmw_qnx/core/ring.hpp) | [`test_ring.cpp`](tests/core/test_ring.cpp) |
 | Truncated or forged CDR fails without reading past the buffer | Every truncation of 200 random messages | same | CI | [`core/cdr.hpp`](rmw_qnx/core/cdr.hpp) | [`test_cdr.cpp`](tests/core/test_cdr.cpp) |
@@ -210,7 +212,8 @@ No public RMW implementation over QNX message passing was found in a search of G
 - `results/` recorded runs; `docs/` results, porting notes, recorded sessions
 
 Limitations: QoS deadline events and graph queries (`rmw_get_topic_names_and_types` and the rest) are not
-implemented, and ROS 2's `test_rmw_implementation` and `test_communication` suites have not been run.
+implemented; `test_rmw_implementation` passes 85 of 125 on rmw_qnx ([failures by suite](docs/RESULTS.md#1e-ros-2s-own-rmw-test-suite));
+`test_communication` has not been run.
 
 ## License
 

@@ -52,7 +52,7 @@ a late client sends its next request late.
 |---|---|---|---|---|
 | Fast DDS | 3 | 120 of 600 | 120 of 120 sent mid-burst | `inversion-ros2-20261107-063223` |
 | Cyclone DDS | 7 | 280 of 1400 | 280 of 280 sent mid-burst | `-043659`, `-053325`, `-063223` |
-| rmw_qnx | 8 | **3 of 1600** | **0 of 640** sent mid-burst | `-051340`, `-053325`, `-060819`, `-063223` |
+| rmw_qnx | 9 | **3 of 1800** | **0 of 720** sent mid-burst | `-051340`, `-053325`, `-060819`, `-063223`, `-064714` |
 
 The three rmw_qnx misses (one each in `-051340`, `-053325` run 3, and `-060819`) were not requests the load delayed:
 in no loaded rmw_qnx run did the load finish first. Their cause is not identified; the scenario log does not record
@@ -130,6 +130,29 @@ Its dependency `rttest` needed one change for QNX ([`qnx/ros2/patches/rttest-rus
 QNX has no `RUSAGE_THREAD`, so rttest counts page faults for the whole process. In this guest rttest also reports
 `mallopt for mmap failed` and `Couldn't lock all cached virtual memory`, and goes on. The demo's latency statistics
 are in the result file as raw output; they are not claims.
+
+## 1e. ROS 2's own rmw test suite
+
+**Command**: build once with `RMWQNX_TESTING=ON ONLY=1 bash qnx/ros2/build.sh ~/rmw_qnx-work test_rmw_implementation`
+(WSL), then `bash scripts/inversion_ros2.sh up` and `bash scripts/rmw_suite.sh rmw_qnx rmw_cyclonedds_cpp rmw_fastrtps_cpp`
+([`results/test_rmw_implementation-20261107-064622.txt`](../results/test_rmw_implementation-20261107-064622.txt),
+summarised by [`scripts/suite_summary.py`](../scripts/suite_summary.py)). The suite is ROS 2 Jazzy's, unchanged: 16
+test executables, each given 120 s.
+
+```
+rmw_qnx: 85 passed, 36 failed, of 125 tests run; executables that did not finish: test_serialize_deserialize
+rmw_cyclonedds_cpp: 122 passed, 0 failed, of 126 tests run; executables that did not finish: test_create_destroy_node
+rmw_fastrtps_cpp: 126 passed, 0 failed, of 126 tests run; executables that did not finish: test_create_destroy_node
+```
+
+"Tests run" counts the executables that finished; an executable that crashed is listed and its tests are not counted.
+`test_create_destroy_node` crashed on both DDS middlewares in this guest and finished on rmw_qnx;
+`test_serialize_deserialize` crashed on rmw_qnx after its C-message round trip failed (rmw_qnx serialises only C++
+introspection types). The 36 rmw_qnx failures, by test suite: graph queries 15 (`rmw_get_node_names` and the rest are
+not implemented), subscription use 6 (matched counts across endpoints, `take_sequence`, ignoring local publications),
+content filters 3, events 4 (no event is raised yet), publisher use 3, service 3, client 1, serialisation of C types 1,
+infinite durations 1. The first run of this suite, before argument checks, name and QoS validation, serialisation and
+event objects were added, passed 66 of 112 ([`results/test_rmw_implementation-20261107-064053.txt`](../results/test_rmw_implementation-20261107-064053.txt)).
 
 ## 2. The same property at the transport level
 
