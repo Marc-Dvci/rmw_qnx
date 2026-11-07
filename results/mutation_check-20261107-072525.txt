@@ -1,0 +1,17 @@
+# scripts/mutation_check.sh
+scripts/mutation_check.sh: line 23:  1053 Aborted                 (core dumped) "$S/build/core_tests" --gtest_brief=1 > /dev/null 2>&1
+killed    torn-read detection (ring.hpp)
+killed    lost-message count (ring.hpp)
+killed    slot size check (ring.hpp)
+killed    string NUL check (cdr.hpp)
+scripts/mutation_check.sh: line 23:  1473 Segmentation fault      (core dumped) "$S/build/core_tests" --gtest_brief=1 > /dev/null 2>&1
+killed    forged length check (cdr.hpp)
+killed    unbounded length for an unknown element size (cdr.hpp)
+scripts/mutation_check.sh: line 23:  1682 Segmentation fault      (core dumped) "$S/build/core_tests" --gtest_brief=1 > /dev/null 2>&1
+killed    null buffer check (cdr.hpp)
+killed    request taken by its pulse's priority (sendq.hpp)
+killed    percent escaping (names.hpp)
+killed    removal by owner (graph.hpp)
+killed    durability rule (qos.hpp)
+killed    deadline miss rule (qos.hpp)
+mutants killed: 12 of 12

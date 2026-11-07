@@ -1,0 +1,10 @@
+# COVERAGE=1 scripts/host_tests.sh   (gcovr 8.8)
+[==========] 63 tests from 13 test suites ran. (128 ms total)
+[  PASSED  ] 63 tests.
+------------------------------------------------------------------------------
+lines: 96.3% (412 out of 428)
+functions: 100.0% (69 out of 69)
+branches: 71.1% (377 out of 530)
+lines: 96.3% (412 out of 428)
+functions: 100.0% (69 out of 69)
+branches: 71.1% (377 out of 530)

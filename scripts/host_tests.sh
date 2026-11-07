@@ -9,6 +9,8 @@ cmake -S "$REPO/tests/core" -B "$B" -DCOVERAGE="${COVERAGE:+ON}" -DSANITIZE="${S
 cmake --build "$B" -j4 >/dev/null
 "$B/core_tests" --gtest_shuffle --gtest_brief=1
 if [ -n "${COVERAGE:-}" ]; then
-    gcovr -r "$REPO" --filter "$REPO/rmw_qnx/core/" --branches -s "$B" | tail -4
+    # gcovr before 7 takes --branches; later versions --txt-metric branch.
+    gcovr -r "$REPO" --filter "$REPO/rmw_qnx/core/" --branches -s "$B" 2>/dev/null | tail -4 ||
+        gcovr -r "$REPO" --filter "$REPO/rmw_qnx/core/" --txt-metric branch -s "$B" | tail -4
     gcovr -r "$REPO" --filter "$REPO/rmw_qnx/core/" -s "$B" | tail -3
 fi
