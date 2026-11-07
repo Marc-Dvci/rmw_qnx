@@ -1,0 +1,39 @@
+# inversion through ROS 2, QEMU, WHPX, 2 vCPUs, all three processes pinned to CPU 0; 2026-11-07T03:43:53Z
+
+>>> [rcutils|error_handling.c:108] rcutils_set_error_state()
+This error state is being overwritten:
+
+  'rmw_qnx: rmw_create_subscription (topics) is not supported yet, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/rmwqnx/rmw_qnx/src/rmw_qnx.cpp:348, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:112'
+
+with this new error message:
+
+  'invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261'
+
+rcutils_reset_error() should be called after error handling to avoid this.
+<<<
+invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261
+terminate called after throwing an instance of 'rclcpp::exceptions::RCLError'
+  what():  could not create subscription: invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261
+Abort (core dumped) 
+invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261
+terminate called after throwing an instance of 'rclcpp::exceptions::RCLError'
+  what():  could not create subscription: invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261
+
+>>> [rcutils|error_handling.c:108] rcutils_set_error_state()
+This error state is being overwritten:
+
+  'rmw_qnx: rmw_create_subscription (topics) is not supported yet, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/rmwqnx/rmw_qnx/src/rmw_qnx.cpp:348, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:112'
+
+with this new error message:
+
+  'invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261'
+
+rcutils_reset_error() should be called after error handling to avoid this.
+<<<
+invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261
+terminate called after throwing an instance of 'rclcpp::exceptions::RCLError'
+  what():  could not create subscription: invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261
+Abort (core dumped) 
+invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261
+terminate called after throwing an instance of 'rclcpp::exceptions::RCLError'
+  what():  could not create subscription: invalid allocator, at ~/rmw_qnx-work/build-files/ports/ros2/ros2-jazzy/src/ros2/rcl/rcl/src/rcl/subscription.c:261
