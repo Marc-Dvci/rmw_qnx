@@ -36,11 +36,17 @@ if [ ! -f .rmwqnx-patched-2 ]; then
     tail -n +5 "$HERE/patches/rcutils-strndup.patch" | git -C src/ros2/rcutils apply -
     touch .rmwqnx-patched-2
 fi
+if [ ! -f .rmwqnx-patched-3 ]; then
+    tail -n +3 "$HERE/patches/rttest-rusage.patch" | git -C src/ros2/realtime_support apply --directory=rttest -
+    touch .rmwqnx-patched-3
+fi
 for p in rosidl_python rclpy ros2cli launch launch_ros rosbag2 rviz ros2cli_common_extensions sros2 system_tests; do
     [ -d "src/ros2/$p" ] && touch "src/ros2/$p/COLCON_IGNORE"
 done
 # numpy_vendor is listed by QNX's patches in some interface packages, for their Python bindings only.
 touch modules/numpy_vendor/COLCON_IGNORE
+# build-files leaves realtime_support (rttest, tlsf_cpp) out; pendulum_control needs it. Set aside, not removed.
+[ -f src/ros2/realtime_support/COLCON_IGNORE ] && mv src/ros2/realtime_support/COLCON_IGNORE src/ros2/realtime_support/COLCON_IGNORE.set-aside
 export CPU=x86_64 CPUVARDIR=x86_64 CPUVAR=x86_64 ARCH=x86_64 QNX_SDP_VERSION=qnx800
 export WORKSPACE="$ROS" PROJECT_ROOT="$ROS" INSTALL_BASE="$WORK/ros2-install/x86_64"
 export LC_NUMERIC="en_US.UTF-8" PYTHONPYCACHEPREFIX=/tmp

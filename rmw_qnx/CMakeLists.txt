@@ -22,6 +22,14 @@ target_link_libraries(rmw_qnx
 
 register_rmw_implementation("cpp:rosidl_typesupport_cpp:rosidl_typesupport_introspection_cpp")
 
+# /dev/ros2: the graph as a resource manager.
+add_executable(ros2graphd src/ros2graphd.cpp)
+target_include_directories(ros2graphd PRIVATE core src)
+target_link_libraries(ros2graphd
+  rosidl_runtime_c::rosidl_runtime_c
+  rosidl_typesupport_introspection_cpp::rosidl_typesupport_introspection_cpp)
+install(TARGETS ros2graphd DESTINATION bin)
+
 install(TARGETS rmw_qnx
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

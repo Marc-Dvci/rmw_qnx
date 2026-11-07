@@ -1,0 +1,15 @@
+rttest counts page faults per thread with getrusage(RUSAGE_THREAD). QNX 8.0 has RUSAGE_SELF and RUSAGE_CHILDREN only,
+so on QNX it counts them for the whole process. The fault counts rttest prints are then per process.
+--- a/src/rttest.cpp
++++ b/src/rttest.cpp
+@@ -19,6 +19,10 @@
+ #include <malloc.h>
+ #include <sys/mman.h>
+ #include <sys/resource.h>
++#if defined(__QNX__) && !defined(RUSAGE_THREAD)
++// QNX has no per-thread resource usage: count the process's.
++#define RUSAGE_THREAD RUSAGE_SELF
++#endif
+ #include <string.h>
+ #include <unistd.h>
+ 
