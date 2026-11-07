@@ -329,11 +329,21 @@ void accept_request(rmw_context_impl_s *ctx, rcvid_t rcvid, const _msg_info &inf
   s->w.notify();
 }
 
-const its::ServiceMembers *service_members(const rosidl_service_type_support_t *ts) {
+// The C++ introspection members of a service, or nullptr. A service that offers only the C type support (rcl's own
+// ~/get_type_description is one) is still created: it is registered and visible, and a request to it gets an error
+// reply, until the C introspection serialiser exists. *ok is false only if no usable type support exists at all.
+const its::ServiceMembers *service_members(const rosidl_service_type_support_t *ts, bool *ok) {
   const rosidl_service_type_support_t *h = get_service_typesupport_handle(ts, its::typesupport_identifier);
+  *ok = true;
   if (!h) {
     rmw_reset_error();
-    RMW_SET_ERROR_MSG("rmw_qnx: only the C++ introspection type support is supported so far");
+    if (get_service_typesupport_handle(ts, "rosidl_typesupport_introspection_c")) {
+      rmw_reset_error();
+      return nullptr;
+    }
+    rmw_reset_error();
+    *ok = false;
+    RMW_SET_ERROR_MSG("rmw_qnx: this service has no introspection type support");
     return nullptr;
   }
   return static_cast<const its::ServiceMembers *>(h->data);
@@ -736,13 +746,14 @@ rmw_service_t *rmw_create_service(const rmw_node_t *node, const rosidl_service_t
     RMW_SET_ERROR_MSG("empty service name");
     return nullptr;
   }
-  const its::ServiceMembers *sm = service_members(ts);
-  if (!sm) return nullptr;
+  bool ts_ok = false;
+  const its::ServiceMembers *sm = service_members(ts, &ts_ok);
+  if (!ts_ok) return nullptr;
   rmw_context_impl_s *ctx = node->context->impl;
   auto *s = new ServiceImpl();
   s->ctx = ctx;
-  s->req = sm->request_members_;
-  s->res = sm->response_members_;
+  s->req = sm ? sm->request_members_ : nullptr;
+  s->res = sm ? sm->response_members_ : nullptr;
   {
     std::lock_guard<std::mutex> l(ctx->mu);
     s->index = ctx->next_service++;
@@ -802,7 +813,7 @@ rmw_ret_t rmw_take_request(const rmw_service_t *srv, rmw_service_info_t *hdr, vo
     s->queue.pop_front();
   }
   CdrReader r(p.data.data(), p.data.size());
-  if (!r.ok() || !rmw_qnx::deserialize_cpp(s->req, ros_request, r)) {
+  if (!r.ok() || !s->req || !rmw_qnx::deserialize_cpp(s->req, ros_request, r)) {
     MsgError(p.rcvid, EBADMSG);
     RMW_SET_ERROR_MSG("rmw_qnx: malformed request");
     return RMW_RET_ERROR;
@@ -838,7 +849,7 @@ rmw_ret_t rmw_send_response(const rmw_service_t *srv, rmw_request_id_t *id, void
   }
   std::vector<uint8_t> body;
   CdrWriter w(&body);
-  if (!rmw_qnx::serialize_cpp(s->res, ros_response, w) || body.size() > kMaxReply) {
+  if (!s->res || !rmw_qnx::serialize_cpp(s->res, ros_response, w) || body.size() > kMaxReply) {
     MsgError(rcvid, EMSGSIZE);
     RMW_SET_ERROR_MSG("rmw_qnx: response could not be serialised or is larger than 64 KiB");
     return RMW_RET_ERROR;
@@ -876,12 +887,13 @@ rmw_client_t *rmw_create_client(const rmw_node_t *node, const rosidl_service_typ
     RMW_SET_ERROR_MSG("empty service name");
     return nullptr;
   }
-  const its::ServiceMembers *sm = service_members(ts);
-  if (!sm) return nullptr;
+  bool ts_ok = false;
+  const its::ServiceMembers *sm = service_members(ts, &ts_ok);
+  if (!ts_ok) return nullptr;
   auto *c = new ClientImpl();
   c->ctx = node->context->impl;
-  c->req = sm->request_members_;
-  c->res = sm->response_members_;
+  c->req = sm ? sm->request_members_ : nullptr;
+  c->res = sm ? sm->response_members_ : nullptr;
   c->reg_path = registry_path(c->ctx, name);
   make_gid(c->ctx, c->gid);
   c->chid = ChannelCreate(_NTO_CHF_PRIVATE);
@@ -917,7 +929,7 @@ rmw_ret_t rmw_send_request(const rmw_client_t *cli, const void *ros_request, int
   auto *c = static_cast<ClientImpl *>(cli->data);
   std::vector<uint8_t> body;
   CdrWriter w(&body);
-  if (!rmw_qnx::serialize_cpp(c->req, ros_request, w)) {
+  if (!c->req || !rmw_qnx::serialize_cpp(c->req, ros_request, w)) {
     RMW_SET_ERROR_MSG("rmw_qnx: request could not be serialised");
     return RMW_RET_ERROR;
   }
@@ -949,7 +961,7 @@ rmw_ret_t rmw_take_response(const rmw_client_t *cli, rmw_service_info_t *hdr, vo
     c->responses.pop_front();
   }
   CdrReader r(resp.data.data(), resp.data.size());
-  if (!r.ok() || !rmw_qnx::deserialize_cpp(c->res, ros_response, r)) {
+  if (!r.ok() || !c->res || !rmw_qnx::deserialize_cpp(c->res, ros_response, r)) {
     RMW_SET_ERROR_MSG("rmw_qnx: malformed response");
     return RMW_RET_ERROR;
   }
