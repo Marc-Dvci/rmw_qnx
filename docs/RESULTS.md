@@ -1,6 +1,6 @@
 # Results
 
-Every figure here comes from a run recorded in [`results/`](../results), with the command that reproduces it. All
+Every figure here comes from a transcript in [`results/`](../results), with the command that reproduces it. All
 guest figures are **QEMU, WHPX**: QNX SDP 8.0 x86_64 under QEMU 11.1 with the Windows Hypervisor Platform, 2 vCPUs,
 4 GB, on a Windows PC. The claims are counts: deadline misses, the priority a thread ran at, and who ran first. The
 result files also hold the programs' raw response times in microseconds; they are raw output from a virtual machine,
@@ -29,14 +29,14 @@ middleware, which is chosen with `RMW_IMPLEMENTATION` and nothing else.
   The middleware's own threads keep their process's priority and may use either CPU.
 - 200 requests per run, after 5 warm-up calls.
 
-**Result** ([`results/inversion-ros2-20261107-063223.txt`](../results/inversion-ros2-20261107-063223.txt), the run of
-`killtest_all.sh` with all three middlewares), every run:
+**Result** ([`results/inversion-ros2-20261107-071150.txt`](../results/inversion-ros2-20261107-071150.txt), the run of
+`killtest_all.sh` after the send-queue fix of section 1f), every run:
 
 | Middleware | Load | Runs | Deadline misses | Callback ran at the client's priority (20) | Requests sent mid-burst | Of those, the load finished first |
 |---|---|---|---|---|---|---|
-| Fast DDS | off | 1, 2, 3 | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | - |
+| Fast DDS | off | 1, 2, 3 | 1, 0, 0 | 0, 0, 0 | 0, 0, 0 | - |
 | Cyclone DDS | off | 1, 2, 3 | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | - |
-| rmw_qnx | off | 1, 2, 3 | 0, 0, 0 | 200, 200, 200 | 0, 0, 0 | - |
+| rmw_qnx | off | 1, 2, 3 | 0, 1, 0 | 200, 200, 200 | 0, 0, 0 | - |
 | Fast DDS | on | 1, 2, 3 | **40, 40, 40** | 0, 0, 0 | 40, 40, 40 | **40, 40, 40** |
 | Cyclone DDS | on | 1, 2, 3 | **40, 40, 40** | 0, 0, 0 | 40, 40, 40 | **40, 40, 40** |
 | rmw_qnx | on | 1, 2, 3 | **0, 0, 0** | **200, 200, 200** | 80, 80, 80 | **0, 0, 0** |
@@ -44,43 +44,46 @@ middleware, which is chosen with `RMW_IMPLEMENTATION` and nothing else.
 Over both DDS middlewares every request sent during a burst waited for the whole burst, because the server's
 callback ran at its own priority 10, below the load. Over rmw_qnx the callback ran at the client's priority in every
 call, and every request sent mid-burst finished ahead of the load. The DDS rows have fewer mid-burst requests because
-a late client sends its next request late.
+a late client sends its next request late. Without the load, one Fast DDS call and one rmw_qnx call missed; nothing
+in the log says why. The run before the fix ([`-063223`](../results/inversion-ros2-20261107-063223.txt)) gave the
+same loaded counts.
 
 **Every recorded loaded run**, all with the same scenario and 200 requests:
 
 | Middleware | Runs | Deadline misses | Loaded calls where the load finished first | Files |
 |---|---|---|---|---|
-| Fast DDS | 3 | 120 of 600 | 120 of 120 sent mid-burst | `inversion-ros2-20261107-063223` |
-| Cyclone DDS | 7 | 280 of 1400 | 280 of 280 sent mid-burst | `-043659`, `-053325`, `-063223` |
-| rmw_qnx | 9 | **3 of 1800** | **0 of 720** sent mid-burst | `-051340`, `-053325`, `-060819`, `-063223`, `-064714` |
+| Fast DDS | 6 | 240 of 1200 | 240 of 240 sent mid-burst | `inversion-ros2-20261107-063223`, `-071150` |
+| Cyclone DDS | 10 | 400 of 2000 | 400 of 400 sent mid-burst | `-043659`, `-053325`, `-063223`, `-071150` |
+| rmw_qnx | 12 | **3 of 2400** | **0 of 960** sent mid-burst | `-051340`, `-053325`, `-060819`, `-063223`, `-064714`, `-071150` |
 
 The three rmw_qnx misses (one each in `-051340`, `-053325` run 3, and `-060819`) were not requests the load delayed:
 in no loaded rmw_qnx run did the load finish first. Their cause is not identified; the scenario log does not record
 which request missed.
 
-**From the kernel's trace** ([`results/trace-ros2-20261107-063419/`](../results/trace-ros2-20261107-063419)): one
+**From the kernel's trace** ([`results/trace-ros2-20261107-071347/`](../results/trace-ros2-20261107-071347)): one
 loaded run of 100 requests per middleware under `tracelogger` on the instrumented kernel, decoded on the host with
 the SDP's `traceprinter` and summarised by thread:
 
 ```
-wsl: scripts/trace_decode.sh results/trace-ros2-20261107-063419
-python scripts/trace_summary.py results/trace-ros2-20261107-063419/<rmw>.trace results/trace-ros2-20261107-063419/<rmw>.pinv --threads
+wsl: scripts/trace_decode.sh results/trace-ros2-20261107-071347
+python scripts/trace_summary.py results/trace-ros2-20261107-071347/<rmw>.trace results/trace-ros2-20261107-071347/<rmw>.pinv --threads
 ```
 
 ```
-rmw_fastrtps_cpp: request waits 186; load held CPU 0 for more than 1 ms before the server's thread ran 21; longest 34.8 ms; server's thread ran at priority {10: 452, 20: 103}
-rmw_cyclonedds_cpp: request waits 179; load held CPU 0 for more than 1 ms before the server's thread ran 21; longest 13.0 ms; server's thread ran at priority {10: 364}
-rmw_qnx: request waits 105; load held CPU 0 for more than 1 ms before the server's thread ran 0; longest 0.1 ms; server's thread ran at priority {10: 4, 20: 155}
+rmw_fastrtps_cpp: request waits 184; load held CPU 0 for more than 1 ms before the server's thread ran 21; longest 15.0 ms; server's thread ran at priority {10: 438, 20: 104}
+rmw_cyclonedds_cpp: request waits 176; load held CPU 0 for more than 1 ms before the server's thread ran 21; longest 17.0 ms; server's thread ran at priority {10: 332}
+rmw_qnx: request waits 105; load held CPU 0 for more than 1 ms before the server's thread ran 0; longest 0.1 ms; server's thread ran at priority {10: 3, 20: 153}
 ```
 
 A request wait is an interval in which the client's calling thread was off CPU 0 and the server's executor thread
 ran. In the kernel's record the load ran first, and held CPU 0 for more than 1 ms before the server's thread ran, in
-21 waits on each DDS middleware and in none on rmw_qnx. Over rmw_qnx the server's thread ran at priority 20 in 155 of
-its 159 scheduling events; the 4 at priority 10 are its start-up, before the first request. Over Fast DDS the
-server's thread also ran at 20 in 103 of 555 events; the trace does not say what raised it (it was not enough to
+21 waits on each DDS middleware and in none on rmw_qnx. Over rmw_qnx the server's thread ran at priority 20 in 153 of
+its 156 scheduling events; the 3 at priority 10 are its start-up, before the first request. Over Fast DDS the
+server's thread also ran at 20 in 104 of 542 events; the trace does not say what raised it (it was not enough to
 keep the load from running first in 21 waits). The traced runs' own logs agree: 20 requests where the load finished
 first on each DDS middleware, 0 on rmw_qnx.
 
+The trace before the fix ([`trace-ros2-20261107-063419/`](../results/trace-ros2-20261107-063419)) gave 21, 21 and 0.
 An earlier trace with two middlewares ([`results/trace-ros2-20261107-053447/`](../results/trace-ros2-20261107-053447))
 gave the same picture: 21 Cyclone DDS waits, 0 rmw_qnx waits.
 
@@ -135,12 +138,13 @@ are in the result file as raw output; they are not claims.
 
 **Command**: build once with `RMWQNX_TESTING=ON ONLY=1 bash qnx/ros2/build.sh ~/rmw_qnx-work test_rmw_implementation`
 (WSL), then `bash scripts/inversion_ros2.sh up` and `bash scripts/rmw_suite.sh rmw_qnx rmw_cyclonedds_cpp rmw_fastrtps_cpp`
-([`results/test_rmw_implementation-20261107-064622.txt`](../results/test_rmw_implementation-20261107-064622.txt),
+(rmw_qnx: [`results/test_rmw_implementation-20261107-072314.txt`](../results/test_rmw_implementation-20261107-072314.txt);
+DDS: [`results/test_rmw_implementation-20261107-064622.txt`](../results/test_rmw_implementation-20261107-064622.txt);
 summarised by [`scripts/suite_summary.py`](../scripts/suite_summary.py)). The suite is ROS 2 Jazzy's, unchanged: 16
 test executables, each given 120 s.
 
 ```
-rmw_qnx: 85 passed, 36 failed, of 125 tests run; executables that did not finish: test_serialize_deserialize
+rmw_qnx: 100 passed, 21 failed, of 125 tests run; executables that did not finish: test_serialize_deserialize
 rmw_cyclonedds_cpp: 122 passed, 0 failed, of 126 tests run; executables that did not finish: test_create_destroy_node
 rmw_fastrtps_cpp: 126 passed, 0 failed, of 126 tests run; executables that did not finish: test_create_destroy_node
 ```
@@ -148,11 +152,35 @@ rmw_fastrtps_cpp: 126 passed, 0 failed, of 126 tests run; executables that did n
 "Tests run" counts the executables that finished; an executable that crashed is listed and its tests are not counted.
 `test_create_destroy_node` crashed on both DDS middlewares in this guest and finished on rmw_qnx;
 `test_serialize_deserialize` crashed on rmw_qnx after its C-message round trip failed (rmw_qnx serialises only C++
-introspection types). The 36 rmw_qnx failures, by test suite: graph queries 15 (`rmw_get_node_names` and the rest are
-not implemented), subscription use 6 (matched counts across endpoints, `take_sequence`, ignoring local publications),
-content filters 3, events 4 (no event is raised yet), publisher use 3, service 3, client 1, serialisation of C types 1,
-infinite durations 1. The first run of this suite, before argument checks, name and QoS validation, serialisation and
-event objects were added, passed 66 of 112 ([`results/test_rmw_implementation-20261107-064053.txt`](../results/test_rmw_implementation-20261107-064053.txt)).
+introspection types). The 21 rmw_qnx failures, by test suite: subscription use 6 (matched counts across endpoints, `take_sequence`,
+ignoring local publications, no content filter set), content filters 3, events 4 (no event is raised yet), publisher
+use 3, service 3, client 1, serialisation of C types 1, infinite durations 1. The graph suite, 15 failures before
+graph queries existed, now passes. Earlier runs: 66 of 112 before argument checks and validation
+([`-064053`](../results/test_rmw_implementation-20261107-064053.txt)), 85 of 125 before graph queries
+([`-064622`](../results/test_rmw_implementation-20261107-064622.txt)).
+
+## 1f. Guest checks of rmw_qnx
+
+**Command**: `COPY=1 bash scripts/inversion_ros2.sh up`, then `bash scripts/rmw_checks.sh`
+([`bench/inversion_ros2/src/rmw_checks.cpp`](../bench/inversion_ros2/src/rmw_checks.cpp)). Each check runs in its own
+child process, with `ros2graphd` running.
+
+| Check | Before the fixes ([`-070020`](../results/rmw_checks-20261107-070020.txt)) | After ([`-072311`](../results/rmw_checks-20261107-072311.txt)) |
+|---|---|---|
+| Two threads at 10 and 20 call one client while its sender is busy: each request is served at its caller's priority | FAIL: the request from 10 served at 20 | PASS: 20 at 20, 10 at 10 |
+| The 33rd subscription on a topic is refused, 32 stay matched | FAIL: created, never woken | PASS |
+| `rmw_deserialize` of `00 01 00 00 ff ff ff ff` as `rcl_interfaces/srv/GetParameters_Response` returns an error | FAIL: `std::bad_alloc`, abort | PASS |
+| `rmw_deserialize` with a null buffer and length 8 returns `RMW_RET_INVALID_ARGUMENT` | FAIL: signal 11 | PASS |
+| After its last endpoint goes, a topic is gone from `/dev/shmem` and `/dev/ros2/topics`, and its name takes another type | FAIL: still there | PASS |
+| Two threads create and destroy endpoints on one topic 400 times: every publication reaches its subscription | FAIL only on the final "topic gone" step | PASS: 0 failed, 0 lost |
+| Another process's node and publisher appear in the graph queries and `/dev/ros2/nodes`, and go when it ends | (added later) | PASS |
+
+The first fix (one queue per client, taken in order) was not enough. With the queue fixed
+([`-070536`](../results/rmw_checks-20261107-070536.txt)), the request from 10 still ran at 20. A trace of priorities
+([`-070734`](../results/rmw_checks-20261107-070734.txt) shows that a received pulse or message sets the receiver's
+priority both up and down) placed it: on receiving a request, the server pulsed its own wait set at its previous
+priority, 20, and that pending pulse raised it again. The server no longer pulses the channel the request came in on
+([`-071057`](../results/rmw_checks-20261107-071057.txt): 6 of 6).
 
 ## 2. The same property at the transport level
 
@@ -198,22 +226,28 @@ waits than requests because the client also leaves the CPU inside a request (for
 
 **Command** (Linux or WSL): `scripts/host_tests.sh`; with coverage: `COVERAGE=1 scripts/host_tests.sh` (needs gcovr)
 
+([`results/host_tests-20261107-072606.txt`](../results/host_tests-20261107-072606.txt), gcovr 8.8)
+
 ```
-[==========] 53 tests from 11 test suites ran. (40 ms total)
-[  PASSED  ] 53 tests.
-lines: 95.8% (248 out of 259)
-functions: 100.0% (59 out of 59)
-branches: 70.1% (185 out of 264)
+[==========] 63 tests from 13 test suites ran. (128 ms total)
+[  PASSED  ] 63 tests.
+lines: 96.3% (412 out of 428)
+functions: 100.0% (69 out of 69)
+branches: 71.1% (377 out of 530)
 ```
 
-Coverage is of `rmw_qnx/core/` only (ring, CDR, names, graph, QoS), the code that compiles on the host. The QNX layer
+`SANITIZE=1 scripts/host_tests.sh` builds the same tests with AddressSanitizer and UndefinedBehaviorSanitizer; 63
+passed. The core now also holds the client send queue (`sendq.hpp`) and the graph file format (`graph.hpp`).
+
+Coverage is of `rmw_qnx/core/` only (ring, CDR, names, graph and graph files, QoS, send queue), the code that compiles on the host. The QNX layer
 (`rmw_qnx/src/`) is not in this figure.
 
-**Do the tests fail when the core breaks?** `scripts/mutation_check.sh` applies nine deliberate faults to a scratch
+**Do the tests fail when the core breaks?** `scripts/mutation_check.sh` applies twelve deliberate faults to a scratch
 copy of the core, one at a time (torn-read detection removed, lost-message count zeroed, slot size check loosened,
-string NUL check removed, forged-length check removed, percent escaping broken, removal by owner ignoring the owner,
-the durability rule removed, every deadline period counted as a miss) and rebuilds the tests against each.
-Result: `mutants killed: 9 of 9`.
+string NUL check removed, forged-length check removed, no bound for an unknown element size, null buffer accepted,
+send queue taking the oldest request whatever its priority, percent escaping broken, removal by owner ignoring the
+owner, the durability rule removed, every deadline period counted as a miss) and rebuilds the tests against each.
+Result: `mutants killed: 12 of 12` ([`results/mutation_check-20261107-072525.txt`](../results/mutation_check-20261107-072525.txt)).
 
 The trace summary has its own tests: `python -m pytest -q --noconftest -o addopts="" tests/tools` (11 passed).
 

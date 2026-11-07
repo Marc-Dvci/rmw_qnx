@@ -1,4 +1,4 @@
-"""Render a Mermaid or SVG source to a committed PNG at twice its size (default: docs/architecture.mmd).
+"""Render a Mermaid or SVG source to a committed PNG at twice its size (default: docs/priority_path.svg).
 
     python scripts/render_diagram.py [docs/architecture.mmd | docs/priority_path.svg]
 
@@ -35,7 +35,7 @@ INIT = (
 
 
 def main() -> None:
-    src = (Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs/architecture.mmd").resolve()
+    src = (Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs/priority_path.svg").resolve()
     out = src.with_suffix(".png")
     if src.suffix == ".svg":
         with sync_playwright() as p:
