@@ -109,7 +109,7 @@ same check on Cyclone DDS in that session did not run: ssh to the guest timed ou
 ([`rmw_qnx/src/ros2graphd.cpp`](../rmw_qnx/src/ros2graphd.cpp)), a talker, a listener and a service server, then
 runs `ls` and `cat` on `/dev/ros2`. The recorded session is [`docs/dev_ros2_session.txt`](dev_ros2_session.txt).
 
-## 1d. pendulum_control, unchanged
+## 1d. The pendulum demo, unchanged
 
 **Command**: `bash scripts/pendulum_run.sh 2000 rmw_qnx rmw_cyclonedds_cpp`
 ([`results/pendulum-20261107-062433.txt`](../results/pendulum-20261107-062433.txt)). ROS 2's own `pendulum_demo`

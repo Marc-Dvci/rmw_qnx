@@ -29,7 +29,7 @@ There is no live link: rmw_qnx runs inside QNX. The terminal sessions below are 
 | Criterion | Where it is answered |
 |---|---|
 | Technological implementation | [`rmw_qnx/src/rmw_qnx.cpp`](rmw_qnx/src/rmw_qnx.cpp) (the ROS 2 middleware interface over QNX channels), [`rmw_qnx/src/topics.hpp`](rmw_qnx/src/topics.hpp) (topics), [`rmw_qnx/src/ros2graphd.cpp`](rmw_qnx/src/ros2graphd.cpp) (`/dev/ros2`), [`rmw_qnx/core/`](rmw_qnx/core) (host-tested core), [`docs/PORTING_NOTES.md`](docs/PORTING_NOTES.md) (what it took to run ROS 2 on QNX 8.0 x86_64) |
-| Design | One environment variable; `ls /dev/ros2/topics` and `cat` on a topic ([session](docs/dev_ros2_session.txt)); ROS 2's `pendulum_control` demo unchanged ([result](docs/RESULTS.md#1d-pendulum_control-unchanged)) |
+| Design | One environment variable; `ls /dev/ros2/topics` and `cat` on a topic ([session](docs/dev_ros2_session.txt)); ROS 2's `pendulum_control` demo unchanged ([result](docs/RESULTS.md#1d-the-pendulum-demo-unchanged)) |
 | Potential impact | [The problem](#the-problem) |
 | Innovation | Priority inheritance carried through ROS 2's asynchronous service call ([How it works](#how-it-works)) |
 | Best use of QNX-specific technologies | [Evidence of QNX use](#evidence-of-qnx-use): message passing, pulses, a resource manager, the instrumented kernel |
