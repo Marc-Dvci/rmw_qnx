@@ -17,7 +17,7 @@ export WORKSPACE="$ROS" PROJECT_ROOT="$ROS" INSTALL_BASE="$WORK/ros2-install/x86
 export MAKEFLAGS=-j4
 colcon build --merge-install \
     --build-base "$WORK/ros2-build/x86_64" --install-base "$WORK/ros2-install/x86_64" \
-    --packages-select rmw_qnx rmwqnx_inversion "$@" \
+    --packages-select rmw_qnx rmwqnx_inversion ${RMWQNX_SKIP:+--packages-ignore $RMWQNX_SKIP} "$@" \
     --cmake-args \
     -DCMAKE_TOOLCHAIN_FILE="$ROS/platform/qnx.nto.toolchain.cmake" -DCMAKE_MODULE_PATH="$ROS/modules" \
     -DBUILD_TESTING:BOOL=OFF -DCMAKE_BUILD_TYPE=Release --no-warn-unused-cli -DCPU=x86_64
