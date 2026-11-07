@@ -2,48 +2,105 @@
 
 Every figure here comes from a run recorded in [`results/`](../results), with the command that reproduces it. All
 guest figures are **QEMU, WHPX**: QNX SDP 8.0 x86_64 under QEMU 11.1 with the Windows Hypervisor Platform, 2 vCPUs,
-4 GB, on a Windows PC. They count who ran first, which priority a thread ran at, and deadline misses. They are not
-microsecond timing claims: a virtual machine's timer is not a board's.
+4 GB, on a Windows PC. The claims are counts: deadline misses, the priority a thread ran at, and who ran first. The
+result files also hold the programs' raw response times in microseconds; they are raw output from a virtual machine,
+not timing claims.
 
-## 1. Priority across a request, at the transport level
+## 1. The kill test: priority inversion through ROS 2
+
+**Command** (Git Bash on Windows, after the build in [the README](../README.md#build-and-run)):
+
+```
+bash scripts/killtest_all.sh
+```
+
+It boots the guest, removes `/data/ros2`, installs the ROS 2 build from the work folder, runs the scenario three
+times per middleware with and without the load (`scripts/inversion_ros2.sh run`), runs one traced loaded run per
+middleware (`scripts/inversion_ros2.sh trace`), and stops the guest. It took 3 minutes.
+
+**Setup** ([`bench/inversion_ros2/src/inversion.cpp`](../bench/inversion_ros2/src/inversion.cpp), run by
+[`scripts/guest/run_inversion.sh`](../scripts/guest/run_inversion.sh)): three processes, the same binary for every
+middleware, which is chosen with `RMW_IMPLEMENTATION` and nothing else.
+
+- A client node at priority 20 calls `example_interfaces/srv/AddTwoInts` every 10 ms and needs the reply within 5 ms.
+- A server node at priority 10 does 1 ms of work in its callback and returns its own current priority in the reply.
+- A load process at priority 15, with no ROS, is busy 20 ms of every 50 ms.
+- The measured threads (the client's calling thread, the server's executor thread, the load) are pinned to CPU 0.
+  The middleware's own threads keep their process's priority and may use either CPU.
+- 200 requests per run, after 5 warm-up calls.
+
+**Result** ([`results/inversion-ros2-20261107-053325.txt`](../results/inversion-ros2-20261107-053325.txt)), every run:
+
+| Middleware | Load | Run | Deadline misses | Callback ran at the client's priority (20) | Requests sent mid-burst | Of those, the load finished first |
+|---|---|---|---|---|---|---|
+| Cyclone DDS | off | 1, 2, 3 | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 | - |
+| rmw_qnx | off | 1, 2, 3 | 0, 0, 0 | 200, 200, 200 | 0, 0, 0 | - |
+| Cyclone DDS | on | 1, 2, 3 | **40, 40, 40** | 0, 0, 0 | 40, 40, 40 | **40, 40, 40** |
+| rmw_qnx | on | 1, 2, 3 | **0, 0, 1** | **200, 200, 200** | 80, 80, 80 | **0, 0, 0** |
+
+Over Cyclone DDS every request sent during a burst waited for the whole burst, because the server's callback ran at
+its own priority 10, below the load. Over rmw_qnx the callback ran at the client's priority in all 600 loaded calls,
+and in every one of the 240 sent mid-burst it finished ahead of the load. Cyclone DDS has fewer mid-burst requests
+because a late client sends its next request late.
+
+The one rmw_qnx miss (run 3 under load) was not a request the load delayed: no loaded rmw_qnx request had the load
+finish first. Its cause is not identified from this run; the scenario log does not record which request it was.
+An earlier single run ([`results/inversion-ros2-20261107-051340.txt`](../results/inversion-ros2-20261107-051340.txt))
+also had one such miss; Cyclone DDS had 40 in its earlier run
+([`results/inversion-ros2-20261107-043659.txt`](../results/inversion-ros2-20261107-043659.txt)).
+
+**From the kernel's trace** ([`results/trace-ros2-20261107-053447/`](../results/trace-ros2-20261107-053447)): one
+loaded run of 100 requests per middleware under `tracelogger` on the instrumented kernel, decoded on the host with the
+SDP's `traceprinter` and summarised by thread:
+
+```
+wsl: scripts/trace_decode.sh results/trace-ros2-20261107-053447
+python scripts/trace_summary.py results/trace-ros2-20261107-053447/<rmw>.trace results/trace-ros2-20261107-053447/<rmw>.pinv --threads
+```
+
+```
+rmw_cyclonedds_cpp: request waits 163; load held CPU 0 for more than 1 ms before the server's thread ran 21; longest 12.9 ms; server's thread ran at priority {10: 344}
+rmw_qnx: request waits 105; load held CPU 0 for more than 1 ms before the server's thread ran 0; longest 0.1 ms; server's thread ran at priority {10: 4, 20: 172}
+```
+
+A request wait is an interval in which the client's calling thread was off CPU 0 and the server's executor thread
+ran. In the kernel's record, the load ran first and held CPU 0 for up to 12.9 ms in 21 Cyclone DDS waits; over
+rmw_qnx it never held the CPU longer than 0.1 ms before the server's thread ran, and the server's thread ran at
+priority 20 in 172 of its 176 scheduling events (the 4 at priority 10 are its start-up, before the first request).
+The traced runs' own logs agree: 20 Cyclone DDS requests where the load finished first, 0 for rmw_qnx.
+
+Fast DDS is not in this comparison: it is not built yet.
+
+## 2. The same property at the transport level
 
 **Command** (Git Bash on Windows, after `qnx/stage1.sh` in WSL): `bash scripts/pinv_run.sh 200`
 
-**Setup** ([`bench/pinv/pinv.c`](../bench/pinv/pinv.c)): three processes pinned to CPU 0 with `ThreadCtl(_NTO_TCTL_RUNMASK)`.
-A client at priority 20 sends one request every 10 ms and needs the reply within 5 ms. A server at priority 10 does
-1 ms of computation per request. A load at priority 15 is busy for 20 ms of every 50 ms. The same request travels
-over QNX `MsgSend`/`MsgReply`, a UDP socket on loopback (through io-sock), or a shared-memory slot with two
+**Setup** ([`bench/pinv/pinv.c`](../bench/pinv/pinv.c)): three processes pinned to CPU 0 with
+`ThreadCtl(_NTO_TCTL_RUNMASK)`, with the priorities, periods, work and deadline of section 1. The same request
+travels over QNX `MsgSend`/`MsgReply`, a UDP socket on loopback (through io-sock), or a shared-memory slot with two
 process-shared semaphores.
 
 **Result** ([`results/pinv-20261107-002853.txt`](../results/pinv-20261107-002853.txt)), 200 requests per row:
 
-| Transport | Load | Deadline misses | Server ran at client's priority (20) | Requests sent mid-burst | Of those, load finished first | Worst response |
-|---|---|---|---|---|---|---|
-| MsgSend/MsgReply | off | 0 | 200 | 0 | 0 | 1.9 ms |
-| UDP | off | 0 | 0 | 0 | 0 | 1.8 ms |
-| shared memory | off | 0 | 0 | 0 | 0 | 2.5 ms |
-| MsgSend/MsgReply | on | **0** | **200** | 80 | **0** | 1.9 ms |
-| UDP | on | **40** | 0 | 40 | **40** | 16.0 ms |
-| shared memory | on | **40** | 0 | 40 | **40** | 15.1 ms |
-
-Over UDP and shared memory, every request sent while the load was busy waited for the whole burst: the
-priority-10 server could not run while the priority-15 load did, so the priority-20 client waited on the load. Over
-message passing the server ran at 20 from the moment it received, ahead of the load, every time. (Over UDP and shared
-memory only 40 requests were sent mid-burst, because a delayed client sends its next request late.)
+| Transport | Load | Deadline misses | Server ran at client's priority (20) | Requests sent mid-burst | Of those, load finished first |
+|---|---|---|---|---|---|
+| MsgSend/MsgReply | off | 0 | 200 | 0 | 0 |
+| UDP | off | 0 | 0 | 0 | 0 |
+| shared memory | off | 0 | 0 | 0 | 0 |
+| MsgSend/MsgReply | on | **0** | **200** | 80 | **0** |
+| UDP | on | **40** | 0 | 40 | **40** |
+| shared memory | on | **40** | 0 | 40 | **40** |
 
 "Server ran at client's priority" is the server's own reading of its current priority (`SchedGet`,
 `sched_curpriority`) while it worked. "Load finished first" means the request's work ended after the burst that was
 running when it was sent.
 
-## 2. The same, from the kernel's trace
-
-**Command**: `bash scripts/pinv_trace.sh`, then in WSL `scripts/trace_decode.sh results/trace-<time>` and
-`python scripts/trace_summary.py results/trace-<time>/<mode>.trace results/trace-<time>/<mode>.pinv`
-
-`tracelogger` ran for 2 s on the instrumented kernel (`procnto-smp-instr`) during 100 requests per transport, under
-load. The `.kev` files are in [`results/trace-20261107-003244/`](../results/trace-20261107-003244); `traceprinter` from
-the SDP decodes them on the host. The summary keeps the kernel's `THRUNNING` events on CPU 0 and, for every interval
-in which the client was off the CPU and the server ran, asks which of server or load the kernel ran first.
+**From the kernel's trace**: `bash scripts/pinv_trace.sh`, then `scripts/trace_decode.sh results/trace-<time>` in
+WSL and `python scripts/trace_summary.py results/trace-<time>/<mode>.trace results/trace-<time>/<mode>.pinv`.
+`tracelogger` ran for 2 s during 100 requests per transport, under load
+([`results/trace-20261107-003244/`](../results/trace-20261107-003244)). The summary keeps the `THRUNNING` events on
+CPU 0 and, for every interval in which the client was off the CPU and the server ran, asks which of server or load
+the kernel ran first.
 
 | Transport | Request waits | Server ran first | Load ran first | Server's `THRUNNING` events at priority 20 / 10 |
 |---|---|---|---|---|
@@ -51,60 +108,10 @@ in which the client was off the CPU and the server ran, asks which of server or 
 | UDP | 170 | 149 | **21** | 1 / 250 |
 | shared memory | 184 | 163 | **21** | 5 / 190 |
 
-The kernel's view agrees with the programs' own log of the same runs (`.pinv` files: 0, 20 and 20 requests where the
-load finished first). There are more waits than requests because the client also leaves the CPU inside a request
-(for io-sock, for instance). The three priority-10 events over MsgSend are the server starting up, before its first
-request.
+The programs' own logs of the same runs agree (0, 20 and 20 requests where the load finished first). There are more
+waits than requests because the client also leaves the CPU inside a request (for io-sock, for instance).
 
-## 3. Through ROS 2: the kill test
-
-**Command** (Git Bash on Windows, after `qnx/ros2/build.sh` and `qnx/ros2/build_ours.sh` in WSL):
-
-```
-bash scripts/inversion_ros2.sh up
-bash scripts/inversion_ros2.sh run 200 rmw_cyclonedds_cpp
-bash scripts/inversion_ros2.sh run 200 rmw_qnx
-bash scripts/inversion_ros2.sh down
-```
-
-**Setup** ([`bench/inversion_ros2/src/inversion.cpp`](../bench/inversion_ros2/src/inversion.cpp)): the scenario of
-section 1 as three ROS 2 processes, unchanged between middlewares. A client node at priority 20 calls
-`example_interfaces/srv/AddTwoInts` every 10 ms with a 5 ms deadline. A server node at priority 10 does 1 ms of
-work in its callback and returns its own current priority. A load process at priority 15 is busy 20 ms of every 50 ms.
-The measured threads (the client's calling thread, the server's executor thread, the load) are pinned to CPU 0; the
-middleware's own threads keep their process's priority and may use either CPU. The middleware is chosen with
-`RMW_IMPLEMENTATION` and nothing else. 200 requests per row, after 5 warm-up calls.
-
-**Result** ([`results/inversion-ros2-20261107-043659.txt`](../results/inversion-ros2-20261107-043659.txt) for Cyclone DDS,
-[`results/inversion-ros2-20261107-051340.txt`](../results/inversion-ros2-20261107-051340.txt) for rmw_qnx):
-
-| Middleware | Load | Deadline misses | Callback ran at client's priority (20) | Requests sent mid-burst | Of those, load finished first | p50 | Worst |
-|---|---|---|---|---|---|---|---|
-| Cyclone DDS | off | 0 | 0 | 0 | 0 | 1.90 ms | 2.37 ms |
-| rmw_qnx | off | 0 | 200 | 0 | 0 | 1.42 ms | 2.24 ms |
-| Cyclone DDS | on | **40** | 0 | 40 | **40** | 1.87 ms | 14.08 ms |
-| rmw_qnx | on | **1** | **200** | 80 | **0** | 2.13 ms | 5.98 ms |
-
-Over Cyclone DDS every request sent during a burst waited for the whole burst, because the server's callback ran at
-10. Over rmw_qnx the callback ran at the client's priority 20 for all 200 requests, and finished ahead of the load
-every time it was contended. One rmw_qnx request took 5.98 ms, over the 5 ms deadline; it was not one where the load
-ran first, and the run log does not say more about it. Run once each.
-
-Fast DDS is not in this comparison yet: it is not built (`RMWQNX_SKIP` in [`qnx/ros2/build.sh`](../qnx/ros2/build.sh)).
-
-### What it took to run ROS 2 on this guest
-
-- The ROS 2 cross-build with build-files' toolchain file links shared objects with `--as-needed` before qcc adds
-  `-lc`, so libc pieces from `libcS.a` were copied into, and exported from, many libraries. `qnx/ros2/build.sh` adds
-  `-Wl,--no-as-needed`.
-- QNX 8.0's x86_64 `memchr` crashes when the length is `SIZE_MAX` and the start pointer is not 8-byte aligned, which
-  `rcutils_strdup` does. [`qnx/ros2/patches/memchr_size_max.c`](../qnx/ros2/patches/memchr_size_max.c) shows it in
-  the guest (aligned start: ok; offsets 1 to 7: crashed);
-  [`qnx/ros2/patches/rcutils-strndup.patch`](../qnx/ros2/patches/rcutils-strndup.patch) uses `strnlen` instead.
-- With every middleware thread pinned to CPU 0, Cyclone DDS discovery never completed (a priority-20 thread kept the
-  CPU from the priority-10 server's discovery). Only the measured threads are pinned now.
-
-## 4. Host tests of the core
+## 3. Host tests of the core
 
 **Command** (Linux or WSL): `scripts/host_tests.sh`; with coverage: `COVERAGE=1 scripts/host_tests.sh` (needs gcovr)
 
@@ -123,5 +130,11 @@ Coverage is of `rmw_qnx/core/` only (ring, CDR, names, graph, QoS), the code tha
 copy of the core, one at a time (torn-read detection removed, lost-message count zeroed, slot size check loosened,
 string NUL check removed, forged-length check removed, percent escaping broken, removal by owner ignoring the owner,
 the durability rule removed, every deadline period counted as a miss) and rebuilds the tests against each.
-Result: `mutants killed: 9 of 9`. The forged-length mutant is killed by the test process aborting on a huge
-allocation, which is the failure the check exists to prevent.
+Result: `mutants killed: 9 of 9`.
+
+The trace summary has its own tests: `python -m pytest -q --noconftest -o addopts="" tests/tools` (11 passed).
+
+## 4. Getting ROS 2 Jazzy to run on QNX 8.0 x86_64
+
+Two faults stopped every ROS 2 process in the guest before `main` ran. Both are described, with reproduction, in
+[`PORTING_NOTES.md`](PORTING_NOTES.md).
