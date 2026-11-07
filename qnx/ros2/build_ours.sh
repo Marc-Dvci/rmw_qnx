@@ -15,12 +15,17 @@ cd "$ROS"
 export CPU=x86_64 CPUVARDIR=x86_64 CPUVAR=x86_64 ARCH=x86_64 QNX_SDP_VERSION=qnx800
 export WORKSPACE="$ROS" PROJECT_ROOT="$ROS" INSTALL_BASE="$WORK/ros2-install/x86_64"
 export MAKEFLAGS=-j4
-colcon build --merge-install \
+colcon build --merge-install --cmake-clean-cache \
     --build-base "$WORK/ros2-build/x86_64" --install-base "$WORK/ros2-install/x86_64" \
     --packages-select rmw_qnx rmwqnx_inversion ${RMWQNX_SKIP:+--packages-ignore $RMWQNX_SKIP} "$@" \
     --cmake-args \
-    -DCMAKE_TOOLCHAIN_FILE="$ROS/platform/qnx.nto.toolchain.cmake" -DCMAKE_MODULE_PATH="$ROS/modules" \
+    -DCMAKE_TOOLCHAIN_FILE="$ROS/platform/qnx.nto.toolchain.cmake" -DCMAKE_MODULE_PATH="$ROS/modules" -DEXTRA_CMAKE_LINKER_FLAGS=-Wl,--no-as-needed \
     -DBUILD_TESTING:BOOL=OFF -DCMAKE_BUILD_TYPE=Release --no-warn-unused-cli -DCPU=x86_64
 cd "$WORK/ros2-install"
-tar -czf "$WORK/ros2-x86_64.tar.gz" --exclude='*/include/*' --exclude='*.a' x86_64
+# Run time needs the libraries, the executables and share/ament_index; the build-time files (headers, CMake files,
+# environment hooks) are left out, which also keeps the file count within the guest's data partition.
+tar -czf "$WORK/ros2-x86_64.tar.gz" --exclude='*/include' --exclude='*.a' --exclude='*/cmake' --exclude='*/hook' \
+    --exclude='*/environment' --exclude='*.ps1' --exclude='*.dsv' --exclude='*.sh' --exclude='*.bash' --exclude='*.zsh' \
+    --exclude='*.msg' --exclude='*.srv' --exclude='*.idl' --exclude='*.action' --exclude='*/src/*' x86_64
+tar -tzf "$WORK/ros2-x86_64.tar.gz" | wc -l
 ls -la "$WORK/ros2-x86_64.tar.gz"

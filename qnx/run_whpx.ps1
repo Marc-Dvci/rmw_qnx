@@ -22,6 +22,11 @@ if ($Stop) {
     } else { "no pidfile" }
     return
 }
+if (Test-Path $pidFile) {
+    $id = [int](Get-Content $pidFile -Raw).Trim()
+    $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+    if ($p -and $p.ProcessName -like "qemu-system*") { "already running as pid $id"; return }
+}
 $noAvx512 = "-avx512f,-avx512dq,-avx512ifma,-avx512cd,-avx512bw,-avx512vl,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512bitalg,-avx512-vpopcntdq,-avx512-bf16"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $a = @("-accel", "whpx", "-machine", "pc", "-cpu", "host,+arat,x-force-features=on,$noAvx512", "-smp", "2", "-m", "4G",

@@ -10,6 +10,11 @@
 # out (for example "fastrtps rmw_fastrtps_cpp rmw_fastrtps_shared_cpp rmw_fastrtps_dynamic_cpp" to get to Cyclone
 # DDS first).
 #
+# -Wl,--no-as-needed: build-files' toolchain file links shared objects with --as-needed ahead of the libraries qcc
+# adds, so libc.so is dropped and libc pieces are copied from libcS.a into each library and exported. Their memchr
+# then interposes on everyone else's, and every process that sets RMW_IMPLEMENTATION crashes in rcutils_strndup
+# (docs/RESULTS.md, "A QNX build fault").
+#
 # Python packages (rclpy, rosidl_python) are left out: the guest's Python is 3.13, which build-files does not target,
 # and nothing here needs Python on the guest.
 set -euo pipefail
@@ -39,12 +44,14 @@ export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 export MAKEFLAGS=-j2
 df -h /mnt/c | tail -1
 # shellcheck disable=SC2086
-colcon build --merge-install --parallel-workers 2 --packages-skip-build-finished \
+# FRESH=1 reconfigures and rebuilds everything (after a change of flags).
+if [ -n "${FRESH:-}" ]; then RESUME="--cmake-clean-cache"; else RESUME="--packages-skip-build-finished"; fi
+colcon build --merge-install --parallel-workers 2 $RESUME \
     --build-base "$WORK/ros2-build/x86_64" --install-base "$WORK/ros2-install/x86_64" \
     --packages-up-to $PKGS ${RMWQNX_SKIP:+--packages-ignore $RMWQNX_SKIP} \
     --cmake-args \
     -DCMAKE_TOOLCHAIN_FILE="$ROS/platform/qnx.nto.toolchain.cmake" \
-    -DCMAKE_MODULE_PATH="$ROS/modules" \
+    -DCMAKE_MODULE_PATH="$ROS/modules" -DEXTRA_CMAKE_LINKER_FLAGS=-Wl,--no-as-needed \
     -DBUILD_TESTING:BOOL=OFF -DQNX_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DTHIRDPARTY=FORCE \
     --no-warn-unused-cli -DCPU=x86_64 -DSECURITY=ON
 df -h /mnt/c | tail -1
