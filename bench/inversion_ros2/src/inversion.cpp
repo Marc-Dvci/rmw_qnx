@@ -4,8 +4,9 @@
 //   inversion load          priority 15, busy 20 ms of every 50 ms (no ROS)
 //   inversion client [N]    priority 20, one request every 10 ms, 5 ms deadline, then prints the result
 //
-// All three pin themselves to CPU 0 before rclcpp starts, so every thread the RMW creates inherits the process's
-// priority and CPU. They share a log in shared memory (/rmwqnx-inversion, created by the client) with timestamps
+// The threads the scenario measures are pinned to CPU 0 (the client's calling thread, the server's executor thread,
+// the load); the middleware's own threads keep the process's priority and may use either CPU (pin_this_thread). They
+// share a log in shared memory (/rmwqnx-inversion, created by the client) with timestamps
 // from ClockCycles(), from which the client reports, per request, the priority the server's callback ran at, whether
 // the load was mid-burst, who finished first and the deadline misses. The server returns its own current priority in
 // the response's `sum` field, so the client also sees it without the log.
@@ -67,21 +68,26 @@ void log_ev(Kind k, int seq) {
   if (i < kMaxEvents) g_log->ev[i] = Event{ClockCycles(), k, seq, cur_prio()};
 }
 
+void pin_this_thread();
+
 void become(int prio) {
+  // INVERSION_NO_RT=1: leave priority and CPU alone (to tell middleware faults from scheduling effects).
+  if (std::getenv("INVERSION_NO_RT")) return;
   sched_param p{};
   p.sched_priority = prio;
   if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &p) != 0) {
     std::perror("pthread_setschedparam");
     std::exit(2);
   }
-  // Pin to CPU 0, and make every thread created later (the RMW's own threads) inherit the same mask.
-  const int sz = RMSK_SIZE(_syspage_ptr->num_cpu);
-  std::vector<unsigned> buf(1 + 2 * sz, 0);
-  *reinterpret_cast<int *>(buf.data()) = sz;
-  unsigned *run = buf.data() + 1, *inherit = run + sz;
-  RMSK_SET(0, run);
-  RMSK_SET(0, inherit);
-  if (ThreadCtl(_NTO_TCTL_RUNMASK_GET_AND_SET_INHERIT, buf.data()) == -1) {
+}
+
+// Pins only the calling thread to CPU 0. The middleware's own threads (created by rclcpp::init and the RMW) keep the
+// process's priority but may use either CPU: pinned with them, one DDS discovery thread at priority 20 kept CPU 0
+// and the priority-10 server was never discovered. The threads pinned here are the ones the scenario measures: the
+// client's calling thread, the server's executor thread (which runs the callback) and the load.
+void pin_this_thread() {
+  if (std::getenv("INVERSION_NO_RT") || std::getenv("INVERSION_NO_PIN")) return;
+  if (ThreadCtl(_NTO_TCTL_RUNMASK, reinterpret_cast<void *>(uintptr_t{1})) == -1) {
     std::perror("runmask");
     std::exit(2);
   }
@@ -146,6 +152,7 @@ int run_server(int argc, char **argv) {
   g_log->server_ready = 1;
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node);
+  pin_this_thread();
   while (rclcpp::ok() && !g_log->stop) exec.spin_some(std::chrono::milliseconds(100));
   rclcpp::shutdown();
   return 0;
@@ -153,6 +160,7 @@ int run_server(int argc, char **argv) {
 
 int run_load() {
   become(kPrioLoad);
+  pin_this_thread();
   g_log = map_log(false);
   auto next = std::chrono::steady_clock::now();
   int k = 0;
@@ -196,6 +204,7 @@ int run_client(int argc, char **argv, int nreq, bool verbose) {
   }
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node);
+  pin_this_thread();
   // Warm up: the first calls pay for discovery and allocation.
   for (int i = 0; i < 5; i++) {
     auto req = std::make_shared<AddTwoInts::Request>();
