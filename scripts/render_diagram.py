@@ -1,6 +1,6 @@
-"""Render a Mermaid source to a committed PNG for the README (default: docs/architecture.mmd).
+"""Render a Mermaid or SVG source to a committed PNG at twice its size (default: docs/architecture.mmd).
 
-    python scripts/render_diagram.py [docs/architecture.mmd]
+    python scripts/render_diagram.py [docs/architecture.mmd | docs/priority_path.svg]
 
 A committed image loads wherever the README is read; GitHub's own Mermaid renderer can refuse a diagram that other
 Mermaid versions draw. Needs Playwright with Chromium: pip install -r requirements-dev.txt, then
@@ -37,6 +37,20 @@ INIT = (
 def main() -> None:
     src = (Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs/architecture.mmd").resolve()
     out = src.with_suffix(".png")
+    if src.suffix == ".svg":
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(device_scale_factor=2, viewport={"width": 1200, "height": 1400})
+            page.set_content(
+                '<body style="margin:0;background:#fff"><div id="d" style="display:inline-block">'
+                + src.read_text(encoding="utf-8")
+                + "</div></body>"
+            )
+            page.locator("#d svg").screenshot(path=str(out))
+            width = page.locator("#d svg").bounding_box()["width"]
+            browser.close()
+        print(f"wrote {out.relative_to(ROOT)} ({width:.0f} px wide at 1x, rendered at 2x)")
+        return
     code = "\n".join(line for line in src.read_text(encoding="utf-8").splitlines() if not line.startswith("%%"))
     with sync_playwright() as p:
         browser = p.chromium.launch()

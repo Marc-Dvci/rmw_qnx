@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="560" viewBox="0 0 860 560" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <!-- Source of docs/priority_path.png: python scripts/render_diagram.py docs/priority_path.svg -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1f2328"/>
+    </marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8c959f"/>
+    </marker>
+  </defs>
+  <rect width="860" height="560" fill="#ffffff"/>
+  <text x="430" y="34" text-anchor="middle" font-size="21" font-weight="600" fill="#1f2328">A ROS 2 service call on rmw_qnx: who runs at whose priority</text>
+
+  <!-- client process -->
+  <rect x="24" y="60" width="330" height="300" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="40" y="86" font-size="15" font-weight="600" fill="#57606a">client node process</text>
+  <rect x="44" y="100" width="290" height="62" rx="8" fill="#ffffff" stroke="#57606a"/>
+  <text x="58" y="125" font-size="15" fill="#1f2328">calling thread, priority <tspan font-weight="700">20</tspan></text>
+  <text x="58" y="147" font-size="13" fill="#57606a">rmw_send_request: queue, return at once</text>
+  <line x1="189" y1="162" x2="189" y2="222" stroke="#1f2328" stroke-width="2" marker-end="url(#a)"/>
+  <text x="199" y="190" font-size="13" fill="#1f2328">pulse sent at 20,</text>
+  <text x="199" y="207" font-size="13" fill="#1f2328">naming priority 20</text>
+  <rect x="44" y="226" width="290" height="62" rx="8" fill="#ffffff" stroke="#57606a"/>
+  <text x="58" y="251" font-size="15" fill="#1f2328">sender thread, now at <tspan font-weight="700">20</tspan></text>
+  <text x="58" y="273" font-size="13" fill="#57606a">takes the oldest request queued at 20</text>
+  <text x="44" y="318" font-size="13" fill="#57606a">A request queued at 10 is taken by the pulse at 10</text>
+  <text x="44" y="336" font-size="13" fill="#57606a">and leaves at 10.</text>
+
+  <!-- server process -->
+  <rect x="506" y="60" width="330" height="300" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="522" y="86" font-size="15" font-weight="600" fill="#57606a">server node process</text>
+  <rect x="526" y="100" width="290" height="62" rx="8" fill="#ffffff" stroke="#57606a"/>
+  <text x="540" y="125" font-size="15" fill="#1f2328">executor thread, own priority <tspan font-weight="700">10</tspan></text>
+  <text x="540" y="147" font-size="13" fill="#57606a">rmw_wait: blocked in MsgReceive</text>
+  <line x1="671" y1="162" x2="671" y2="222" stroke="#1f2328" stroke-width="2" marker-end="url(#a)"/>
+  <text x="681" y="190" font-size="13" fill="#1f2328">receives the</text>
+  <text x="681" y="207" font-size="13" fill="#1f2328">request</text>
+  <rect x="526" y="226" width="290" height="62" rx="8" fill="#ffffff" stroke="#1a7f37" stroke-width="2"/>
+  <text x="540" y="251" font-size="15" fill="#1f2328">same thread, now at <tspan font-weight="700">20</tspan></text>
+  <text x="540" y="273" font-size="13" fill="#57606a">runs the callback; MsgReply to answer</text>
+  <text x="526" y="318" font-size="13" fill="#57606a">It keeps 20 until it next receives.</text>
+
+  <!-- the message -->
+  <line x1="334" y1="246" x2="522" y2="246" stroke="#1f2328" stroke-width="2.5" marker-end="url(#a)"/>
+  <text x="428" y="236" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">MsgSend</text>
+  <text x="428" y="268" text-anchor="middle" font-size="12" fill="#57606a">the kernel runs the receiver</text>
+  <text x="428" y="284" text-anchor="middle" font-size="12" fill="#57606a">at the sender's priority</text>
+  <line x1="522" y1="300" x2="338" y2="300" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#g)"/>
+  <text x="428" y="318" text-anchor="middle" font-size="12" fill="#57606a">MsgReply</text>
+
+  <!-- the load -->
+  <rect x="24" y="384" width="812" height="56" rx="8" fill="#ffffff" stroke="#bf8700" stroke-width="1.5"/>
+  <text x="40" y="408" font-size="15" fill="#1f2328">A busy process at priority <tspan font-weight="700">15</tspan> on the same CPU waits: 20 &gt; 15, so the call finishes first.</text>
+  <text x="40" y="428" font-size="13" fill="#57606a">Over DDS the callback runs at the server's own 10, and the busy process at 15 runs first.</text>
+
+  <!-- the result -->
+  <text x="24" y="474" font-size="15" font-weight="600" fill="#1f2328">Measured (QEMU, WHPX), 200 calls per run, 5 ms deadline, busy process on:</text>
+  <text x="24" y="500" font-size="15" fill="#1f2328">Fast DDS and Cyclone DDS: 40 missed in each of 3 runs.  rmw_qnx: 0 missed in each of 3 runs;</text>
+  <text x="24" y="522" font-size="15" fill="#1f2328">the callback ran at the client's priority in 200 of 200 calls.  (bash scripts/killtest_all.sh)</text>
+</svg>

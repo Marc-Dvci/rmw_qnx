@@ -3,14 +3,19 @@ message: "If you use rmw_qnx or its evaluation, please cite it as below."
 type: software
 title: "rmw_qnx: ROS 2 over QNX message passing, so a node's priority travels with its messages"
 abstract: >-
-  {{ABSTRACT}}
+  A ROS 2 Jazzy middleware (RMW) implementation for QNX SDP 8.0. Service requests travel by MsgSend and MsgReply,
+  so the server's callback runs at the calling client's priority; topics are shared-memory rings woken by pulses at
+  each subscriber's own priority; the graph is browsable under /dev/ros2 through a QNX resource manager.
 authors:
   - family-names: Donovici
     given-names: Marc
-version: 1.0.0
-date-released: "{{RELEASE_DATE}}"
-license: MIT
+version: 0.1.0
+license: Apache-2.0
 repository-code: "https://github.com/Marc-Dvci/rmw_qnx"
-url: "{{DEMO_URL}}"
 keywords:
-  - "{{KEYWORD}}"
+  - ROS 2
+  - QNX
+  - RMW
+  - real-time
+  - priority inheritance
+  - message passing

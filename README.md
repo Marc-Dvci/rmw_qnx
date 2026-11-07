@@ -2,8 +2,8 @@
 
 [![Tests](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/tests.yml/badge.svg)](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/tests.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Core tests](https://img.shields.io/badge/core%20tests-53%20passed-brightgreen)](docs/RESULTS.md#3-host-tests-of-the-core)
-[![Core line coverage](https://img.shields.io/badge/core%20line%20coverage-95.8%25-brightgreen)](docs/RESULTS.md#3-host-tests-of-the-core)
+[![Core tests](https://img.shields.io/badge/core%20tests-63%20passed-brightgreen)](docs/RESULTS.md#3-host-tests-of-the-core)
+[![Core line coverage](https://img.shields.io/badge/core%20line%20coverage-96.3%25-brightgreen)](docs/RESULTS.md#3-host-tests-of-the-core)
 
 **A ROS 2 middleware for QNX 8.0 that carries messages through the kernel's own message passing, so a robot's
 high-priority node stays high-priority when it calls a low-priority one.** For teams running ROS 2 on QNX who need
@@ -60,7 +60,7 @@ server:       pid 1310744, channel 1, service 2
 transport:    MsgSend/MsgReply: the server's thread runs at the calling client's priority
 ```
 
-The kill test, with one command (`bash scripts/killtest_all.sh`, [full output](results/inversion-ros2-20261107-063223.txt)),
+The kill test, with one command (`bash scripts/killtest_all.sh`, [full output](results/inversion-ros2-20261107-071150.txt)),
 loaded runs:
 
 ```
@@ -70,7 +70,8 @@ RESULT rmw=rmw_qnx            requests=200 misses=0  contended=80 load_ran_first
 ```
 
 (one of three runs per middleware shown; columns trimmed for width.) The kernel's own trace of one run each
-(`scripts/trace_summary.py --threads`):
+(`scripts/trace_decode.sh results/trace-ros2-20261107-071347` in WSL, then
+`python scripts/trace_summary.py results/trace-ros2-20261107-071347/<rmw>.trace results/trace-ros2-20261107-071347/<rmw>.pinv --threads`):
 
 ```
 rmw_fastrtps_cpp:   load held CPU 0 for more than 1 ms before the server's thread ran 21 times
@@ -89,25 +90,20 @@ passing runs the receiving thread at the sender's priority. This project puts RO
 
 ## How it works
 
-```
- client node (prio 20)                                    server node (prio 10)
-   rclcpp -> rcl -> rmw_qnx                                 rclcpp -> rcl -> rmw_qnx
-   rmw_send_request                                          rmw_wait: MsgReceive on the context channel
-     | MsgSendPulse, priority of the caller                    ^  the receiving thread takes priority 20,
-     v                                                         |  returns to the executor, the callback runs at 20
-   sender thread, now at 20  ------------ MsgSend ------------+
-                             <----------- MsgReply ----------- rmw_send_response
+![A service call on rmw_qnx: the calling thread at 20 pulses the sender thread, which runs at 20 and does MsgSend; the server's executor thread, priority 10, receives it and runs the callback at 20; a busy process at 15 waits](docs/priority_path.png)
 
- publisher -> shared-memory ring per topic -> MsgSendPulse at each subscriber's own priority -> subscriber's wait set
- /dev/ros2 (ros2graphd, a resource manager) reads the rings and the service registry on every open
-```
+([source](docs/priority_path.svg), rendered with `python scripts/render_diagram.py docs/priority_path.svg`)
+
+Topics take a different path: the publisher writes a shared-memory ring per topic and sends each subscriber a pulse
+at that subscriber's own priority. `/dev/ros2` (ros2graphd, a resource manager) reads the rings, the service
+registry and the graph files on every open.
 
 | ROS 2 concept | rmw_qnx | QNX mechanism |
 |---|---|---|
-| Service call | rcl's request call must not block, so `rmw_send_request` hands the request to the client's sender thread with a pulse sent at the caller's priority; that thread, now at the caller's priority, does `MsgSend` to the server's context channel; the server thread blocked in `MsgReceive` inside `rmw_wait` takes that priority, runs the callback, and `rmw_send_response` replies | `MsgSendPulse` with priority -1, `MsgSendv`, `MsgReceive`, `MsgReplyv`, priority inheritance on the channel |
+| Service call | rcl's request call must not block, so `rmw_send_request` queues the request with the caller's priority and sends the client's sender thread a pulse at that priority; that thread, now at the caller's priority, takes the oldest request of that priority ([`core/sendq.hpp`](rmw_qnx/core/sendq.hpp)) and does `MsgSend` to the server's context channel; the server thread blocked in `MsgReceive` inside `rmw_wait` takes that priority, runs the callback, and `rmw_send_response` replies | `MsgSendPulse` with priority -1, `MsgSendv`, `MsgReceive`, `MsgReplyv`, priority inheritance on the channel |
 | Wait set | `rmw_wait` blocks in `MsgReceive` on one channel; guard conditions and topics wake it with pulses at the waiting thread's own priority | `ChannelCreate`, `ConnectAttach`, `TimerTimeout` |
 | Topic | A shared-memory ring per topic ([`topics.hpp`](rmw_qnx/src/topics.hpp) over [`core/ring.hpp`](rmw_qnx/core/ring.hpp)); the publisher serialises once, never blocks, and pulses each subscriber at the priority that subscriber registered with | `shm_open`, `mmap`, `MsgSendPulse`, `MsgReceivePulse` |
-| Graph | `ros2graphd`: `/dev/ros2/topics` and `/dev/ros2/services`, rendered fresh on every open; a topic's latest message is decoded with its type's own introspection library | `resmgr_attach`, `iofunc` layer, `_IO_XTYPE_READDIR` |
+| Graph | Each context writes its nodes and endpoints to a graph file and pulses the other contexts, whose nodes' graph guard conditions then fire; the graph queries read the files of live processes. `ros2graphd` serves `/dev/ros2/nodes`, `/dev/ros2/topics` and `/dev/ros2/services`, rendered fresh on every open; a topic's latest message is decoded with its type's own introspection library | `resmgr_attach`, `iofunc` layer, `_IO_XTYPE_READDIR`, `MsgSendPulse` |
 | Serialisation | CDR from the C++ introspection type support, with a bounds-checked reader ([`core/cdr.hpp`](rmw_qnx/core/cdr.hpp)) | |
 
 Plain logic (ring, CDR, name encoding, graph bookkeeping, QoS rules) lives in [`rmw_qnx/core/`](rmw_qnx/core),
@@ -130,8 +126,10 @@ compiles on any host, and is tested there.
 - It does not carry messages between machines: message passing and shared memory are local to one QNX system.
 - It carries data for types with the C++ introspection type support. Types offered only with the C type support (rcl's
   own `/rosout`) are created but carry nothing yet.
-- Loaned messages, content filters, security enclaves and graph queries return `RMW_RET_UNSUPPORTED`; QoS events can
-  be created but are never raised.
+- Loaned messages, content filters and `rmw_get_serialized_message_size` return `RMW_RET_UNSUPPORTED`; QoS events
+  can be created but are never raised; security options are accepted and have no effect.
+- A process that dies without destroying its endpoints leaves its topic rings in `/dev/shmem` (graph queries skip
+  dead processes, the rings stay).
 - It makes no timing claim beyond the counts below: the figures come from a virtual machine.
 
 ## Evidence
@@ -140,21 +138,22 @@ All guest figures are QEMU, WHPX, and each has its command in [`docs/RESULTS.md`
 
 | Claim | Measured | Command | Recorded output | Code | Test |
 |---|---|---|---|---|---|
-| A medium load delays a high-priority ROS 2 client on DDS and not on rmw_qnx | Loaded misses: Fast DDS 40, 40, 40; Cyclone DDS 40, 40, 40; rmw_qnx 0, 0, 0 (of 200) | `bash scripts/killtest_all.sh` | [`inversion-ros2-20261107-063223.txt`](results/inversion-ros2-20261107-063223.txt) | [`rmw_qnx.cpp`](rmw_qnx/src/rmw_qnx.cpp) | the command itself |
-| Across every recorded loaded run, rmw_qnx misses are not caused by the load | rmw_qnx 3 misses in 1,800 calls, load finished first in 0 of 720 mid-burst calls; Cyclone DDS 280 in 1,400; Fast DDS 120 in 600 | as above, repeated | [RESULTS §1](docs/RESULTS.md#1-the-kill-test-priority-inversion-through-ros-2) | | |
+| A medium load delays a high-priority ROS 2 client on DDS and not on rmw_qnx | Loaded misses: Fast DDS 40, 40, 40; Cyclone DDS 40, 40, 40; rmw_qnx 0, 0, 0 (of 200) | `bash scripts/killtest_all.sh` | [`inversion-ros2-20261107-071150.txt`](results/inversion-ros2-20261107-071150.txt) | [`rmw_qnx.cpp`](rmw_qnx/src/rmw_qnx.cpp) | the command itself |
+| Across every recorded loaded run, rmw_qnx misses are not caused by the load | rmw_qnx 3 misses in 2,400 calls, load finished first in 0 of 960 mid-burst calls; Cyclone DDS 400 in 2,000; Fast DDS 240 in 1,200 | as above, repeated | [RESULTS §1](docs/RESULTS.md#1-the-kill-test-priority-inversion-through-ros-2) | | |
 | The server's callback runs at the client's priority | 200 of 200 in every rmw_qnx run; 0 on DDS | same | same | `rmw_wait`, `sender_main` | same |
-| The kernel's trace agrees | Load held CPU 0 for more than 1 ms before the server's thread: 21, 21, 0 waits | `bash scripts/killtest_all.sh`, then `scripts/trace_summary.py --threads` | [`trace-ros2-20261107-063419/`](results/trace-ros2-20261107-063419) | [`trace_summary.py`](scripts/trace_summary.py) | [`tests/tools`](tests/tools/test_trace_summary.py) (11) |
+| The kernel's trace agrees | Load held CPU 0 for more than 1 ms before the server's thread: 21, 21, 0 waits | `bash scripts/killtest_all.sh`, then the two trace commands above | [`trace-ros2-20261107-071347/`](results/trace-ros2-20261107-071347) | [`trace_summary.py`](scripts/trace_summary.py) | [`tests/tools`](tests/tools/test_trace_summary.py) (11) |
 | The same property holds at the transport level | MsgSend 0 misses; UDP and shared memory 40 of 200 | `bash scripts/pinv_run.sh 200` | [`pinv-20261107-002853.txt`](results/pinv-20261107-002853.txt) | [`pinv.c`](bench/pinv/pinv.c) | |
 | `pendulum_control` runs unchanged | Exit 0; 998 and 998 messages received on rmw_qnx | `bash scripts/pendulum_run.sh 2000` | [`pendulum-20261107-062433.txt`](results/pendulum-20261107-062433.txt) | | |
-| ROS 2's own `test_rmw_implementation` | rmw_qnx 85 passed, 36 failed (125 run; 1 executable crashed); Cyclone DDS 122 of 126; Fast DDS 126 of 126 | `bash scripts/rmw_suite.sh` | [`test_rmw_implementation-20261107-064622.txt`](results/test_rmw_implementation-20261107-064622.txt) | | the suite itself |
+| Two callers at 10 and 20 on one client are each served at their own priority; the 33rd subscription on a topic is refused; a forged nested length and a null buffer are refused; a destroyed topic is gone and its name takes another type; graph queries see another process | 7 of 7 guest checks | `bash scripts/rmw_checks.sh` | [`rmw_checks-20261107-072311.txt`](results/rmw_checks-20261107-072311.txt); before the fixes 0 of 6: [`rmw_checks-20261107-070020.txt`](results/rmw_checks-20261107-070020.txt) | | [`rmw_checks.cpp`](bench/inversion_ros2/src/rmw_checks.cpp) |
+| ROS 2's own `test_rmw_implementation` | rmw_qnx 100 passed, 21 failed (125 run; 1 executable crashed); Cyclone DDS 122 of 126; Fast DDS 126 of 126 | `bash scripts/rmw_suite.sh` | [`test_rmw_implementation-20261107-072314.txt`](results/test_rmw_implementation-20261107-072314.txt), DDS: [`-064622`](results/test_rmw_implementation-20261107-064622.txt) | | the suite itself |
 | Topics cross processes | 20 of 20 messages, in order | `bash scripts/topics_check.sh 20` | [`topics-20261107-064727.txt`](results/topics-20261107-064727.txt) | [`topics.hpp`](rmw_qnx/src/topics.hpp) | |
 | `/dev/ros2` lists the graph and decodes the latest message | Recorded session | `bash scripts/dev_ros2_demo.sh` | [`dev_ros2_session.txt`](docs/dev_ros2_session.txt) | [`ros2graphd.cpp`](rmw_qnx/src/ros2graphd.cpp) | |
 | A reader never takes a torn or repeated message; a lapped reader counts what it lost | Property tests over random interleavings and a racing writer | `scripts/host_tests.sh` | CI | [`core/ring.hpp`](rmw_qnx/core/ring.hpp) | [`test_ring.cpp`](tests/core/test_ring.cpp) |
-| Truncated or forged CDR fails without reading past the buffer | Every truncation of 200 random messages | same | CI | [`core/cdr.hpp`](rmw_qnx/core/cdr.hpp) | [`test_cdr.cpp`](tests/core/test_cdr.cpp) |
-| The core's tests catch deliberate faults | 9 of 9 mutants killed | `scripts/mutation_check.sh` | [RESULTS §3](docs/RESULTS.md#3-host-tests-of-the-core) | [`core/`](rmw_qnx/core) | |
+| Truncated or forged CDR fails without reading past the buffer | Every truncation of 200 random messages; 20,000 random hostile buffers under AddressSanitizer | `SANITIZE=1 scripts/host_tests.sh` | CI | [`core/cdr.hpp`](rmw_qnx/core/cdr.hpp) | [`test_cdr.cpp`](tests/core/test_cdr.cpp) |
+| The core's tests catch deliberate faults | 12 of 12 mutants killed | `scripts/mutation_check.sh` | [`mutation_check-20261107-072525.txt`](results/mutation_check-20261107-072525.txt) | [`core/`](rmw_qnx/core) | |
 
-Tests: 53 host tests of the core (GoogleTest, random order, including property tests; 95.8 % of its lines, 70.1 % of
-its branches) and 11 tests of the trace tool (pytest). The guest runs above are the integration and end-to-end tests.
+Tests: 63 host tests of the core (GoogleTest, random order, including property tests; 96.3 % of its lines, 71.1 % of
+its branches by gcovr 8.8, [transcript](results/host_tests-20261107-072606.txt)) and 11 tests of the trace tool (pytest). The guest runs above are the integration and end-to-end tests.
 
 **Real and synthetic.** The kernel, ROS 2, the middlewares and the measurements are real; the load is a busy loop and
 the server's work a calibrated loop of about 1 ms. Porting notes, each with its reproduction:
@@ -167,6 +166,18 @@ ROS 2 process.
 - **Target:** QEMU x86_64 (`-accel whpx`, 2 vCPUs, 4 GB); aarch64 has not been tried
 - **Toolchain:** `qcc`/`q++`, GCC 12.2.0 (`gcc_ntox86_64`, `gcc_ntox86_64_cxx`), CMake and colcon, on Ubuntu 22.04
   (WSL on Windows here)
+
+### Prerequisites
+
+1. **A free QNX Everywhere licence and QNX SDP 8.0.** Create a myQNX account at <https://www.qnx.com/>, request the
+   free non-commercial QNX Everywhere licence (<https://www.qnx.com/products/everywhere/>), then install the QNX
+   Software Center for Linux and, with it, QNX SDP 8.0 into `~/qnx800`. The scripts source `~/qnx800/qnxsdp-env.sh`;
+   the licence must be activated in the Software Center for `qcc` to run.
+2. **Ubuntu 22.04** (native or WSL) with `build-essential cmake git python3-venv openssh-client`; `qnx/ros2/fetch.sh`
+   makes the Python environment colcon needs.
+3. **QEMU** with KVM on Linux, or QEMU for Windows with the Windows Hypervisor Platform turned on, and Git Bash (its
+   `ssh`) to drive the guest. `qnx/run_whpx.ps1` expects `D:\tools\qemu\qemu-system-x86_64.exe`; pass `-Qemu PATH` (or change its default) for another one.
+4. The guest's ssh key is made by `qnx/stage1.sh` on first use, in `.guest/ssh/` (not committed).
 
 ```sh
 # In Ubuntu, with the SDP at ~/qnx800:
@@ -211,8 +222,7 @@ No public RMW implementation over QNX message passing was found in a search of G
 - `tests/core/` host tests (GoogleTest); `tests/tools/` tests of the trace summary (pytest)
 - `results/` recorded runs; `docs/` results, porting notes, recorded sessions
 
-Limitations: QoS deadline events and graph queries (`rmw_get_topic_names_and_types` and the rest) are not
-implemented; `test_rmw_implementation` passes 85 of 125 on rmw_qnx ([failures by suite](docs/RESULTS.md#1e-ros-2s-own-rmw-test-suite));
+Limitations: QoS events (deadline, matched) are not raised; `test_rmw_implementation` passes 100 of 125 on rmw_qnx ([failures by suite](docs/RESULTS.md#1e-ros-2s-own-rmw-test-suite));
 `test_communication` has not been run.
 
 ## License
