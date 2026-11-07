@@ -108,8 +108,8 @@ An application selects the middleware with `RMW_IMPLEMENTATION=rmw_qnx` and noth
 |---|---|
 | Transport-level measurement | Done, recorded |
 | Guest image and boot scripts | Done |
-| ROS 2 Jazzy subset cross-built for QNX x86_64 | Builds with QNX's patches; see [`qnx/ros2/build.sh`](qnx/ros2/build.sh) |
-| rmw_qnx services, wait sets, guard conditions | Written, compiles for QNX; not yet run in the guest |
+| ROS 2 Jazzy subset cross-built for QNX x86_64 | rclcpp, rcl, Cyclone DDS and the interfaces build with QNX's patches ([`qnx/ros2/build.sh`](qnx/ros2/build.sh)); Fast DDS not built yet |
+| rmw_qnx services, wait sets, guard conditions | `librmw_qnx.so` cross-builds against that subset; not yet run in the guest |
 | rmw_qnx topics, graph (`/dev/ros2`), QoS events, graph queries | Not implemented: their entry points return `RMW_RET_UNSUPPORTED` |
 | `test_rmw_implementation`, `test_communication`, `pendulum_control` | Not run |
 | Latency against Fast DDS and Cyclone DDS | Not measured |
