@@ -686,19 +686,23 @@ rmw_ret_t rmw_wait(rmw_subscriptions_t *subs, rmw_guard_conditions_t *gcs, rmw_s
   const int64_t start = int64_t(t0.tv_sec) * 1000000000 + t0.tv_nsec;
   static thread_local std::vector<uint8_t> buf(64 * 1024);
   bool timed_out = false;
+  bool received_once = false;
   while (!ready()) {
     uint64_t left = 0;
     if (!forever) {
       timespec t;
       clock_gettime(CLOCK_MONOTONIC, &t);
       const int64_t el = int64_t(t.tv_sec) * 1000000000 + t.tv_nsec - start;
-      if (el >= limit) {
+      // Even a zero timeout (a poll, as spin_some does) receives once without blocking, so a request already
+      // waiting on the channel is accepted.
+      if (el >= limit && received_once) {
         timed_out = true;
         break;
       }
-      left = uint64_t(limit - el);
+      left = el >= limit ? 0 : uint64_t(limit - el);
       TimerTimeout(CLOCK_MONOTONIC, _NTO_TIMEOUT_RECEIVE, nullptr, &left, nullptr);
     }
+    received_once = true;
     _msg_info info;
     const rcvid_t rcvid = MsgReceive(chid, buf.data(), buf.size(), &info);
     if (rcvid > 0) {

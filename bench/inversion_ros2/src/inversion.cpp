@@ -153,7 +153,7 @@ int run_server(int argc, char **argv) {
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node);
   pin_this_thread();
-  while (rclcpp::ok() && !g_log->stop) exec.spin_some(std::chrono::milliseconds(100));
+  while (rclcpp::ok() && !g_log->stop) exec.spin_once(std::chrono::milliseconds(100));
   rclcpp::shutdown();
   return 0;
 }
