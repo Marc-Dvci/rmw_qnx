@@ -8,14 +8,14 @@ node's priority travels with them.**
 
 | Track | Built with | Headline measurement (QEMU, WHPX) |
 |---|---|---|
-| Open-Source Contribution & Ports | QNX SDP 8.0, ROS 2 Jazzy, `MsgSend`/`MsgReply`, pulses, `tracelogger` | Under a medium-priority load, a high-priority client's requests missed their 5 ms deadline 0 times in 200 over QNX message passing, and 40 times in 200 over UDP and over shared memory ([results](docs/RESULTS.md)) |
+| Open-Source Contribution & Ports | QNX SDP 8.0, ROS 2 Jazzy, `MsgSend`/`MsgReply`, pulses, `tracelogger` | Through ROS 2 under a medium-priority load, a priority-20 client's service calls missed their 5 ms deadline 40 times in 200 on Cyclone DDS and once in 200 on rmw_qnx, whose server callback ran at priority 20 for all 200 ([results](docs/RESULTS.md#3-through-ros-2-the-kill-test)) |
 
 [How it works](#how-it-works) · [Evidence](#evidence) · [Build and run](#build-and-run) · [Status](#status)
 
 > [!IMPORTANT]
-> Status: the transport-level property is measured in a QNX guest. The RMW layer carries ROS 2 services over
-> message passing; topics, the `/dev/ros2` graph and QoS events are not implemented yet, and no ROS 2 test suite has
-> been run on it. [Status](#status) lists exactly what works.
+> Status: rmw_qnx carries ROS 2 services over message passing and runs in a QNX guest; the priority-inversion
+> scenario is measured against Cyclone DDS. Topics carry no data yet, the `/dev/ros2` graph and QoS events are not
+> implemented, and no ROS 2 test suite has been run on it. [Status](#status) lists exactly what works.
 
 ## For judges
 
@@ -109,8 +109,9 @@ An application selects the middleware with `RMW_IMPLEMENTATION=rmw_qnx` and noth
 | Transport-level measurement | Done, recorded |
 | Guest image and boot scripts | Done |
 | ROS 2 Jazzy subset cross-built for QNX x86_64 | rclcpp, rcl, Cyclone DDS and the interfaces build with QNX's patches ([`qnx/ros2/build.sh`](qnx/ros2/build.sh)); Fast DDS not built yet |
-| rmw_qnx services, wait sets, guard conditions | `librmw_qnx.so` cross-builds against that subset; not yet run in the guest |
-| rmw_qnx topics, graph (`/dev/ros2`), QoS events, graph queries | Not implemented: their entry points return `RMW_RET_UNSUPPORTED` |
+| rmw_qnx services, wait sets, guard conditions | Run in the guest by the inversion scenario (200 calls per run) |
+| rmw_qnx topic endpoints | Created with their QoS and gid; publish drops, take finds nothing |
+| rmw_qnx topic data, graph (`/dev/ros2`), QoS events, graph queries | Not implemented: their entry points return `RMW_RET_UNSUPPORTED` |
 | `test_rmw_implementation`, `test_communication`, `pendulum_control` | Not run |
 | Latency against Fast DDS and Cyclone DDS | Not measured |
 
