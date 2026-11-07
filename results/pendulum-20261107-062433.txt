@@ -1,0 +1,41 @@
+# pendulum_demo -i 2000, QEMU, WHPX; 2026-11-07T05:24:33Z
+## RMW_IMPLEMENTATION=rmw_qnx pendulum_demo -i 2000
+mallopt for mmap failed: Invalid argument
+Couldn't lock all cached virtual memory.
+Pagefaults from reading pages not yet mapped into RAM will be recorded.
+No results filename given, not writing results
+Initial major pagefaults: 0
+Initial minor pagefaults: 0
+rttest statistics:
+  - Minor pagefaults: 0
+  - Major pagefaults: 0
+  Latency (time after deadline was missed):
+    - Min: 24156 ns
+    - Max: 960437 ns
+    - Mean: 742678.907000 ns
+    - Standard deviation: 29083.475743
+
+
+PendulumMotor received 998 messages
+PendulumController received 998 messages
+exit=0
+## RMW_IMPLEMENTATION=rmw_cyclonedds_cpp pendulum_demo -i 2000
+mallopt for mmap failed: Invalid argument
+Couldn't lock all cached virtual memory.
+Pagefaults from reading pages not yet mapped into RAM will be recorded.
+No results filename given, not writing results
+Initial major pagefaults: 0
+Initial minor pagefaults: 0
+rttest statistics:
+  - Minor pagefaults: 0
+  - Major pagefaults: 0
+  Latency (time after deadline was missed):
+    - Min: 40813 ns
+    - Max: 3827408 ns
+    - Mean: 213219.941500 ns
+    - Standard deviation: 245986.537515
+
+
+PendulumMotor received 989 messages
+PendulumController received 990 messages
+exit=0
