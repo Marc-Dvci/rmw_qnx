@@ -1028,26 +1028,80 @@ rmw_ret_t rmw_init_publisher_allocation(const rosidl_message_type_support_t *,
   return unsupported("publisher allocation");
 }
 rmw_ret_t rmw_fini_publisher_allocation(rmw_publisher_allocation_t *) { return unsupported("publisher allocation"); }
-rmw_publisher_t *rmw_create_publisher(const rmw_node_t *, const rosidl_message_type_support_t *, const char *,
-                                      const rmw_qos_profile_t *, const rmw_publisher_options_t *) {
-  unsupported("rmw_create_publisher (topics)");
-  return nullptr;
+// Topic endpoints, first step: they can be created, report their QoS and gid, and are counted as unmatched, but
+// carry no data yet (publish drops, take finds nothing). rclcpp creates some on every node (its time source
+// subscribes to /parameter_events), so a service-only application needs them to exist. Delivery over the
+// shared-memory ring (core/ring.hpp) is the next step.
+struct TopicEndpoint {
+  std::string topic;
+  rmw_qos_profile_t qos;
+  uint8_t gid[RMW_GID_STORAGE_SIZE];
+};
+
+rmw_qos_profile_t resolve(const rmw_qos_profile_t &q) {
+  rmw_qos_profile_t r = q;
+  if (r.history == RMW_QOS_POLICY_HISTORY_SYSTEM_DEFAULT) r.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+  if (r.depth == 0 && r.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST) r.depth = 10;
+  if (r.reliability == RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT) r.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  if (r.durability == RMW_QOS_POLICY_DURABILITY_SYSTEM_DEFAULT) r.durability = RMW_QOS_POLICY_DURABILITY_VOLATILE;
+  if (r.liveliness == RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT) r.liveliness = RMW_QOS_POLICY_LIVELINESS_AUTOMATIC;
+  return r;
 }
-rmw_ret_t rmw_destroy_publisher(rmw_node_t *, rmw_publisher_t *) { return unsupported("topics"); }
+
+rmw_publisher_t *rmw_create_publisher(const rmw_node_t *node, const rosidl_message_type_support_t *ts,
+                                      const char *name, const rmw_qos_profile_t *qos,
+                                      const rmw_publisher_options_t *opts) {
+  RMW_CHECK_ARGUMENT_FOR_NULL(node, nullptr);
+  RMW_CHECK_TYPE_IDENTIFIERS_MATCH(node, node->implementation_identifier, kId, return nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(ts, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(name, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(qos, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(opts, nullptr);
+  auto *e = new TopicEndpoint{name, resolve(*qos), {}};
+  make_gid(node->context->impl, e->gid);
+  rmw_publisher_t *p = rmw_publisher_allocate();
+  p->implementation_identifier = kId;
+  p->data = e;
+  p->topic_name = rcutils_strdup(name, rcutils_get_default_allocator());
+  p->options = *opts;
+  p->can_loan_messages = false;
+  return p;
+}
+rmw_ret_t rmw_destroy_publisher(rmw_node_t *node, rmw_publisher_t *p) {
+  CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
+  CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
+  delete static_cast<TopicEndpoint *>(p->data);
+  rcutils_allocator_t a = rcutils_get_default_allocator();
+  a.deallocate(const_cast<char *>(p->topic_name), a.state);
+  rmw_publisher_free(p);
+  return RMW_RET_OK;
+}
 rmw_ret_t rmw_borrow_loaned_message(const rmw_publisher_t *, const rosidl_message_type_support_t *, void **) {
   return unsupported("loaned messages");
 }
 rmw_ret_t rmw_return_loaned_message_from_publisher(const rmw_publisher_t *, void *) {
   return unsupported("loaned messages");
 }
-rmw_ret_t rmw_publish(const rmw_publisher_t *, const void *, rmw_publisher_allocation_t *) {
-  return unsupported("topics");
+rmw_ret_t rmw_publish(const rmw_publisher_t *p, const void *msg, rmw_publisher_allocation_t *) {
+  CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(msg, RMW_RET_INVALID_ARGUMENT);
+  return RMW_RET_OK;  // no subscriber can match yet
 }
 rmw_ret_t rmw_publish_loaned_message(const rmw_publisher_t *, void *, rmw_publisher_allocation_t *) {
   return unsupported("loaned messages");
 }
-rmw_ret_t rmw_publisher_count_matched_subscriptions(const rmw_publisher_t *, size_t *) { return unsupported("topics"); }
-rmw_ret_t rmw_publisher_get_actual_qos(const rmw_publisher_t *, rmw_qos_profile_t *) { return unsupported("topics"); }
+rmw_ret_t rmw_publisher_count_matched_subscriptions(const rmw_publisher_t *p, size_t *n) {
+  CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(n, RMW_RET_INVALID_ARGUMENT);
+  *n = 0;
+  return RMW_RET_OK;
+}
+rmw_ret_t rmw_publisher_get_actual_qos(const rmw_publisher_t *p, rmw_qos_profile_t *qos) {
+  CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(qos, RMW_RET_INVALID_ARGUMENT);
+  *qos = static_cast<TopicEndpoint *>(p->data)->qos;
+  return RMW_RET_OK;
+}
 rmw_ret_t rmw_publisher_event_init(rmw_event_t *, const rmw_publisher_t *, rmw_event_type_t) {
   return unsupported("events");
 }
@@ -1074,17 +1128,46 @@ rmw_ret_t rmw_init_subscription_allocation(const rosidl_message_type_support_t *
 rmw_ret_t rmw_fini_subscription_allocation(rmw_subscription_allocation_t *) {
   return unsupported("subscription allocation");
 }
-rmw_subscription_t *rmw_create_subscription(const rmw_node_t *, const rosidl_message_type_support_t *, const char *,
-                                            const rmw_qos_profile_t *, const rmw_subscription_options_t *) {
-  unsupported("rmw_create_subscription (topics)");
-  return nullptr;
+rmw_subscription_t *rmw_create_subscription(const rmw_node_t *node, const rosidl_message_type_support_t *ts,
+                                            const char *name, const rmw_qos_profile_t *qos,
+                                            const rmw_subscription_options_t *opts) {
+  RMW_CHECK_ARGUMENT_FOR_NULL(node, nullptr);
+  RMW_CHECK_TYPE_IDENTIFIERS_MATCH(node, node->implementation_identifier, kId, return nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(ts, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(name, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(qos, nullptr);
+  RMW_CHECK_ARGUMENT_FOR_NULL(opts, nullptr);
+  auto *e = new TopicEndpoint{name, resolve(*qos), {}};
+  make_gid(node->context->impl, e->gid);
+  rmw_subscription_t *s = rmw_subscription_allocate();
+  s->implementation_identifier = kId;
+  s->data = e;
+  s->topic_name = rcutils_strdup(name, rcutils_get_default_allocator());
+  s->options = *opts;
+  s->can_loan_messages = false;
+  s->is_cft_enabled = false;
+  return s;
 }
-rmw_ret_t rmw_destroy_subscription(rmw_node_t *, rmw_subscription_t *) { return unsupported("topics"); }
-rmw_ret_t rmw_subscription_count_matched_publishers(const rmw_subscription_t *, size_t *) {
-  return unsupported("topics");
+rmw_ret_t rmw_destroy_subscription(rmw_node_t *node, rmw_subscription_t *s) {
+  CHECK_ID(node, RMW_RET_INVALID_ARGUMENT);
+  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
+  delete static_cast<TopicEndpoint *>(s->data);
+  rcutils_allocator_t a = rcutils_get_default_allocator();
+  a.deallocate(const_cast<char *>(s->topic_name), a.state);
+  rmw_subscription_free(s);
+  return RMW_RET_OK;
 }
-rmw_ret_t rmw_subscription_get_actual_qos(const rmw_subscription_t *, rmw_qos_profile_t *) {
-  return unsupported("topics");
+rmw_ret_t rmw_subscription_count_matched_publishers(const rmw_subscription_t *s, size_t *n) {
+  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(n, RMW_RET_INVALID_ARGUMENT);
+  *n = 0;
+  return RMW_RET_OK;
+}
+rmw_ret_t rmw_subscription_get_actual_qos(const rmw_subscription_t *s, rmw_qos_profile_t *qos) {
+  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(qos, RMW_RET_INVALID_ARGUMENT);
+  *qos = static_cast<TopicEndpoint *>(s->data)->qos;
+  return RMW_RET_OK;
 }
 rmw_ret_t rmw_subscription_event_init(rmw_event_t *, const rmw_subscription_t *, rmw_event_type_t) {
   return unsupported("events");
@@ -1096,12 +1179,18 @@ rmw_ret_t rmw_subscription_get_content_filter(const rmw_subscription_t *, rcutil
                                               rmw_subscription_content_filter_options_t *) {
   return unsupported("content filters");
 }
-rmw_ret_t rmw_take(const rmw_subscription_t *, void *, bool *, rmw_subscription_allocation_t *) {
-  return unsupported("topics");
+rmw_ret_t rmw_take(const rmw_subscription_t *s, void *, bool *taken, rmw_subscription_allocation_t *) {
+  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
+  *taken = false;
+  return RMW_RET_OK;
 }
-rmw_ret_t rmw_take_with_info(const rmw_subscription_t *, void *, bool *, rmw_message_info_t *,
+rmw_ret_t rmw_take_with_info(const rmw_subscription_t *s, void *, bool *taken, rmw_message_info_t *,
                              rmw_subscription_allocation_t *) {
-  return unsupported("topics");
+  CHECK_ID(s, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
+  *taken = false;
+  return RMW_RET_OK;
 }
 rmw_ret_t rmw_take_sequence(const rmw_subscription_t *, size_t, rmw_message_sequence_t *,
                             rmw_message_info_sequence_t *, size_t *, rmw_subscription_allocation_t *) {
@@ -1160,7 +1249,13 @@ rmw_ret_t rmw_count_publishers(const rmw_node_t *, const char *, size_t *) { ret
 rmw_ret_t rmw_count_subscribers(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
 rmw_ret_t rmw_count_clients(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
 rmw_ret_t rmw_count_services(const rmw_node_t *, const char *, size_t *) { return unsupported("graph queries"); }
-rmw_ret_t rmw_get_gid_for_publisher(const rmw_publisher_t *, rmw_gid_t *) { return unsupported("topics"); }
+rmw_ret_t rmw_get_gid_for_publisher(const rmw_publisher_t *p, rmw_gid_t *gid) {
+  CHECK_ID(p, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(gid, RMW_RET_INVALID_ARGUMENT);
+  gid->implementation_identifier = kId;
+  std::memcpy(gid->data, static_cast<TopicEndpoint *>(p->data)->gid, RMW_GID_STORAGE_SIZE);
+  return RMW_RET_OK;
+}
 rmw_ret_t rmw_set_log_severity(rmw_log_severity_t) { return RMW_RET_OK; }
 rmw_ret_t rmw_get_publishers_info_by_topic(const rmw_node_t *, rcutils_allocator_t *, const char *, bool,
                                            rmw_topic_endpoint_info_array_t *) {
