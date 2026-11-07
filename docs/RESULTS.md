@@ -64,9 +64,15 @@ Cyclone DDS and rmw_qnx.
 
 ## 4. Host tests of the core
 
-**Command** (Linux or WSL): `scripts/host_tests.sh`
+**Command** (Linux or WSL): `scripts/host_tests.sh`; with coverage: `COVERAGE=1 scripts/host_tests.sh` (needs gcovr)
 
 ```
-[==========] 29 tests from 6 test suites ran. (33 ms total)
-[  PASSED  ] 29 tests.
+[==========] 53 tests from 11 test suites ran. (40 ms total)
+[  PASSED  ] 53 tests.
+lines: 95.8% (248 out of 259)
+functions: 100.0% (59 out of 59)
+branches: 70.1% (185 out of 264)
 ```
+
+Coverage is of `rmw_qnx/core/` only (ring, CDR, names, graph, QoS), the code that compiles on the host. The QNX layer
+(`rmw_qnx/src/`) is not in this figure.

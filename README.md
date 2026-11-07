@@ -72,7 +72,7 @@ All figures are QEMU, WHPX, and each has its command in [`docs/RESULTS.md`](docs
 | Over UDP and shared memory a medium load makes the high-priority client miss | 40 of 200 misses each; 0 over message passing | same | same |
 | The kernel ran the load before the server in no request wait over message passing, and in 21 over UDP and over shared memory | `tracelogger`, 100 requests each | `bash scripts/pinv_trace.sh` | [`results/trace-20261107-003244/`](results/trace-20261107-003244) |
 | With no load, no transport misses | 0 of 200 each | `bash scripts/pinv_run.sh 200` | [`results/pinv-20261107-002853.txt`](results/pinv-20261107-002853.txt) |
-| The core's ring, CDR reader and name encoding behave as specified | 29 host tests, including property tests | `scripts/host_tests.sh` | CI run page |
+| The core (ring, CDR reader, name encoding, graph bookkeeping, QoS rules) behaves as specified | 53 host tests, including property tests; 95.8 % of the core's lines, 70.1 % of its branches | `COVERAGE=1 scripts/host_tests.sh` | [docs/RESULTS.md](docs/RESULTS.md#4-host-tests-of-the-core) |
 
 Real and synthetic: the programs and the kernel are real; the load is a synthetic busy loop and the work is a
 calibrated loop of about 1 ms.
