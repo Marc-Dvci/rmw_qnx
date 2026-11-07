@@ -18,6 +18,7 @@
 # Python packages (rclpy, rosidl_python) are left out: the guest's Python is 3.13, which build-files does not target,
 # and nothing here needs Python on the guest.
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="${1:-$HOME/rmw_qnx-work}"
 shift || true
 PKGS="${*:-rclcpp rmw_cyclonedds_cpp rmw_fastrtps_cpp rmw_implementation example_interfaces std_msgs}"
@@ -29,6 +30,11 @@ if [ ! -f .rmwqnx-patched ]; then
     ./scripts/colcon-ignore.sh >/dev/null
     ./scripts/patch.sh
     touch .rmwqnx-patched
+fi
+# This repository's own patches on top of QNX's (each explains itself in its header).
+if [ ! -f .rmwqnx-patched-2 ]; then
+    tail -n +5 "$HERE/patches/rcutils-strndup.patch" | git -C src/ros2/rcutils apply -
+    touch .rmwqnx-patched-2
 fi
 for p in rosidl_python rclpy ros2cli launch launch_ros rosbag2 rviz ros2cli_common_extensions sros2 system_tests; do
     [ -d "src/ros2/$p" ] && touch "src/ros2/$p/COLCON_IGNORE"
@@ -45,10 +51,13 @@ export MAKEFLAGS=-j2
 df -h /mnt/c | tail -1
 # shellcheck disable=SC2086
 # FRESH=1 reconfigures and rebuilds everything (after a change of flags).
+# ONLY=1 rebuilds exactly the named packages.
+SEL="--packages-up-to"
 if [ -n "${FRESH:-}" ]; then RESUME="--cmake-clean-cache"; else RESUME="--packages-skip-build-finished"; fi
+if [ -n "${ONLY:-}" ]; then RESUME=""; SEL="--packages-select"; fi
 colcon build --merge-install --parallel-workers 2 $RESUME \
     --build-base "$WORK/ros2-build/x86_64" --install-base "$WORK/ros2-install/x86_64" \
-    --packages-up-to $PKGS ${RMWQNX_SKIP:+--packages-ignore $RMWQNX_SKIP} \
+    $SEL $PKGS ${RMWQNX_SKIP:+--packages-ignore $RMWQNX_SKIP} \
     --cmake-args \
     -DCMAKE_TOOLCHAIN_FILE="$ROS/platform/qnx.nto.toolchain.cmake" \
     -DCMAKE_MODULE_PATH="$ROS/modules" -DEXTRA_CMAKE_LINKER_FLAGS=-Wl,--no-as-needed \
