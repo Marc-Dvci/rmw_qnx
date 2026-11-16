@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Shell scripts are executable from a clean clone
+        run: test -z "$(git ls-files -s '*.sh' | grep '^100644')"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtest-dev gcovr
       - name: Host tests, random order, with coverage
         run: COVERAGE=1 bash scripts/host_tests.sh build/host | tee host-tests.log
