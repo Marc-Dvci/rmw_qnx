@@ -37,6 +37,8 @@ rmw_qnx runs inside QNX 8.0: every session and figure below is recorded from a Q
 
 ## See it work
 
+![Live in a QNX 8.0 guest: the same scenario under load on Fast DDS, Cyclone DDS and rmw_qnx; 40, 40 and 0 missed deadlines, and the callback at the client's priority in 200 of 200 calls on rmw_qnx](docs/kill-test.gif)
+
 The graph is a QNX resource manager, so the shell is the browser
 ([recorded session](docs/dev_ros2_session.txt), `bash scripts/dev_ros2_demo.sh`):
 
