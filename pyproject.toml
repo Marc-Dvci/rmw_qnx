@@ -11,6 +11,9 @@ select = ["E4", "E7", "E9", "F", "B", "I"]
 [tool.pytest.ini_options]
 testpaths = ["tests/tools"]
 addopts = "-ra --strict-markers"
+timeout = 30
 
 [tool.codespell]
-skip = "*.png,*.jpg,*.gif,*.svg,*.lock,package-lock.json,.git,.venv,node_modules,*.kev,*.trace"
+skip = "*.png,*.jpg,*.gif,*.svg,*.lock,.git,.venv,*.kev,*.trace,*.pinv,./results"
+# empy is the template package ROS 2 builds with.
+ignore-words-list = "empy"

@@ -81,7 +81,11 @@ def test_a_brief_load_run_before_an_inheriting_server_is_not_counted() -> None:
 
 def test_the_middlewares_other_threads_neither_end_a_wait_nor_count_as_the_server() -> None:
     runs = thread_runs(
-        (0, CLIENT, 1, 20), (1, CLIENT, 4, 20), (2, SERVER, 3, 10), (3, LOAD, 1, 15), (16, SERVER, 1, 10),
+        (0, CLIENT, 1, 20),
+        (1, CLIENT, 4, 20),
+        (2, SERVER, 3, 10),
+        (3, LOAD, 1, 15),
+        (16, SERVER, 1, 10),
         (17, CLIENT, 1, 20),
     )
     s = ts.summarise_threads(runs, CLIENT, SERVER, LOAD, CPS)

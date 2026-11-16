@@ -1,6 +1,6 @@
 """Passed and failed counts per middleware from a scripts/rmw_suite.sh output file.
 
-    python scripts/suite_summary.py results/test_rmw_implementation-<time>.txt
+python scripts/suite_summary.py results/test_rmw_implementation-<time>.txt
 """
 
 from __future__ import annotations
