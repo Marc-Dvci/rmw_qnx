@@ -30,4 +30,8 @@ cd "$IMAGE_DIR"
 mkqnximage --noprompt --force --build --type=qemu --arch=x86_64 --graphics=no --hostname=rmwqnx --cpu=2 \
     --ram=4G --sys-size=64 --data-size="${RMWQNX_DATA_MB:-3000}" --proc="procnto-smp-instr -P 22" \
     --ssh-ident="$PUBKEY" "$@"
+# The guest boots without snapshot=on, so QEMU stamps a CID into the descriptor at every boot. Without a CID line
+# of its own, QEMU matches the "CID" inside "parentCID" and adds a line each time, until the 512-byte descriptor
+# loses its extent line. A CID line first makes QEMU update it in place.
+grep -q '^CID=' output/disk-qemu.vmdk || sed -i 's/^parentCID=/CID=fffffffe\nparentCID=/' output/disk-qemu.vmdk
 ls -la output/ifs.bin output/disk-qemu.vmdk
