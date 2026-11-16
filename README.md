@@ -1,10 +1,15 @@
 # rmw_qnx
 
 [![Tests](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/tests.yml/badge.svg)](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/tests.yml)
+[![CodeQL](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/codeql.yml/badge.svg)](https://github.com/Marc-Dvci/rmw_qnx/actions/workflows/codeql.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Core tests](https://img.shields.io/badge/core%20tests-63%20passed-brightgreen)](docs/RESULTS.md#3-host-tests-of-the-core)
 [![Core line coverage](https://img.shields.io/badge/core%20line%20coverage-96.3%25-brightgreen)](docs/RESULTS.md#3-host-tests-of-the-core)
 [![QNX SDP 8.0](https://img.shields.io/badge/QNX%20SDP-8.0-0a7d6e)](#build-and-run)
+
+[![The film: rmw_qnx running on QNX 8.0, under 3 minutes](docs/film-thumbnail.png)](https://youtu.be/ROUv-fVm-zQ)
+
+[Watch the film on YouTube](https://youtu.be/ROUv-fVm-zQ) (under 3 minutes).
 
 **A ROS 2 middleware for QNX 8.0 that carries messages through the kernel's own message passing, so a robot's
 high-priority node stays high-priority when it calls a low-priority one.** For teams running ROS 2 on QNX who need
