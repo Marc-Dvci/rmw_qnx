@@ -1,6 +1,7 @@
 # Boots the rmw_qnx guest under QEMU for Windows with the Windows Hypervisor Platform, headless. No window opens.
 #
 #   powershell -File qnx/run_whpx.ps1 [-Dir .guest/vm] [-Qemu PATH] [-Stop]
+#   (-Qemu defaults to $env:QEMU, else qemu-system-x86_64.exe on the PATH)
 #
 # QNX 8.0's startup needs the always-running APIC timer bit in CPUID leaf 6, which Hyper-V hides from its guests;
 # "+arat,x-force-features=on" puts it back. AVX-512 is off. ssh is forwarded to 127.0.0.1:2232, the web port to
@@ -8,7 +9,7 @@
 # -Stop stops this guest only, by the PID in its pidfile.
 param(
     [string]$Dir = (Join-Path $PSScriptRoot "..\.guest\vm"),
-    [string]$Qemu = "D:\tools\qemu\qemu-system-x86_64.exe",
+    [string]$Qemu = $(if ($env:QEMU) { $env:QEMU } else { "qemu-system-x86_64.exe" }),
     [switch]$Stop
 )
 $Dir = (Resolve-Path $Dir).Path

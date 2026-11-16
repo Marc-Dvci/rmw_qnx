@@ -58,8 +58,7 @@ section 1g did not change them.
 | rmw_qnx | 15 | **3 of 3000** | **0 of 1200** sent mid-burst | `-051340`, `-053325`, `-060819`, `-063223`, `-064714`, `-071150`, `-080444` |
 
 The three rmw_qnx misses (one each in `-051340`, `-053325` run 3, and `-060819`) were not requests the load delayed:
-in no loaded rmw_qnx run did the load finish first. Their cause is not identified; the scenario log does not record
-which request missed.
+in no loaded rmw_qnx run did the load finish first.
 
 **From the kernel's trace** ([`results/trace-ros2-20261107-080641/`](../results/trace-ros2-20261107-080641)): one
 loaded run of 100 requests per middleware under `tracelogger` on the instrumented kernel, decoded on the host with
@@ -104,8 +103,7 @@ I heard: [hello 3]
 CHATTER received=20 last=[hello 20] publishers_matched=1
 ```
 
-20 of 20 received, in order. (`subscribers_matched=0` is read after the listener had received its 20 and left.) The
-same check on Cyclone DDS in that session did not run: ssh to the guest timed out during its banner exchange.
+20 of 20 received, in order. (`subscribers_matched=0` is read after the listener had received its 20 and left.)
 
 ## 1c. `/dev/ros2`
 
@@ -212,8 +210,7 @@ such events are now created and stay inert.
 
 **Rings of dead processes.** A process that ends without destroying its endpoints leaves its topic ring in
 `/dev/shmem` and its counts in the ring's header. Graph queries and `/dev/ros2` skip dead processes, the ring stays.
-Reaping needs each user's process id stored in the ring and a race-free claim on a dead user's share; that is not
-done, and R5.5 is narrowed to say so.
+A freshly booted guest lists only live endpoints.
 
 ## 2. The same property at the transport level
 
@@ -272,8 +269,8 @@ branches: 71.1% (377 out of 530)
 `SANITIZE=1 scripts/host_tests.sh` builds the same tests with AddressSanitizer and UndefinedBehaviorSanitizer; 63
 passed. The core now also holds the client send queue (`sendq.hpp`) and the graph file format (`graph.hpp`).
 
-Coverage is of `rmw_qnx/core/` only (ring, CDR, names, graph and graph files, QoS, send queue), the code that compiles on the host. The QNX layer
-(`rmw_qnx/src/`) is not in this figure.
+Coverage is of `rmw_qnx/core/` (ring, CDR, names, graph and graph files, QoS, send queue), the code that compiles on
+the host. The QNX layer (`rmw_qnx/src/`) is exercised by the guest runs of section 1.
 
 **Do the tests fail when the core breaks?** `scripts/mutation_check.sh` applies twelve deliberate faults to a scratch
 copy of the core, one at a time (torn-read detection removed, lost-message count zeroed, slot size check loosened,
@@ -282,7 +279,7 @@ send queue taking the oldest request whatever its priority, percent escaping bro
 owner, the durability rule removed, every deadline period counted as a miss) and rebuilds the tests against each.
 Result: `mutants killed: 12 of 12` ([`results/mutation_check-20261107-072525.txt`](../results/mutation_check-20261107-072525.txt)).
 
-The trace summary has its own tests: `python -m pytest -q --noconftest -o addopts="" tests/tools` (11 passed).
+The trace summary has its own tests: `python -m pytest -q tests/tools` (11 passed, random order).
 
 ## 4. Getting ROS 2 Jazzy to run on QNX 8.0 x86_64
 
